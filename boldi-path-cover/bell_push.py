@@ -15,7 +15,7 @@ class Operation(ABC):
     uid: int = field(default_factory=lambda: next(_id_counter), init=False)
 
     @abstractmethod
-    def add_to_pyzx_circuit(self, circ: zx.Circuit):
+    def add_to_pyzx_circuit(self, circ: zx.Circuit, index_mapping: dict[int, int]):
         pass
 
     @property
@@ -59,40 +59,40 @@ class Measurement(Operation, ABC):
 
 
 class ZState(SingleQubitOperation, StatePreparation):
-    def add_to_pyzx_circuit(self, circ):
-        circ.add_gate("InitAncilla", label=self.i, basis="Z")
+    def add_to_pyzx_circuit(self, circ, index_mapping):
+        circ.add_gate("InitAncilla", label=index_mapping.get(self.i, self.i), basis="Z")
 
 
 class XState(SingleQubitOperation, StatePreparation):
-    def add_to_pyzx_circuit(self, circ):
-        circ.add_gate("InitAncilla", label=self.i, basis="X")
+    def add_to_pyzx_circuit(self, circ, index_mapping):
+        circ.add_gate("InitAncilla", label=index_mapping.get(self.i, self.i), basis="X")
 
 
 class ZBasisMeasurement(SingleQubitOperation, Measurement):
-    def add_to_pyzx_circuit(self, circ):
-        circ.add_gate("PostSelect", label=self.i, basis="Z")
+    def add_to_pyzx_circuit(self, circ, index_mapping):
+        circ.add_gate("PostSelect", label=index_mapping.get(self.i, self.i), basis="Z")
 
 
 class XBasisMeasurement(SingleQubitOperation, Measurement):
-    def add_to_pyzx_circuit(self, circ):
-        circ.add_gate("PostSelect", label=self.i, basis="X")
+    def add_to_pyzx_circuit(self, circ, index_mapping):
+        circ.add_gate("PostSelect", label=index_mapping.get(self.i, self.i), basis="X")
 
 
 class H(SingleQubitOperation):
-    def add_to_pyzx_circuit(self, circ):
-        circ.add_gate("H", self.i)
+    def add_to_pyzx_circuit(self, circ, index_mapping):
+        circ.add_gate("H", index_mapping.get(self.i, self.i))
 
 
 class CNOT(TwoQubitOperation):
-    def add_to_pyzx_circuit(self, circ):
-        circ.add_gate("CNOT", self.i, self.j)
+    def add_to_pyzx_circuit(self, circ, index_mapping):
+        circ.add_gate("CNOT", index_mapping.get(self.i, self.i), index_mapping.get(self.j, self.j))
 
 
 class BellState(TwoQubitOperation, StatePreparation):
-    def add_to_pyzx_circuit(self, circ):
-        circ.add_gate("InitAncilla", label=self.i, basis="X")
-        circ.add_gate("InitAncilla", label=self.j, basis="Z")
-        circ.add_gate("CNOT", self.i, self.j)
+    def add_to_pyzx_circuit(self, circ, index_mapping):
+        circ.add_gate("InitAncilla", label=index_mapping.get(self.i, self.i), basis="X")
+        circ.add_gate("InitAncilla", label=index_mapping.get(self.j, self.j), basis="Z")
+        circ.add_gate("CNOT", index_mapping.get(self.i, self.i), index_mapping.get(self.j, self.j))
 
 
 class Circuit:
@@ -205,7 +205,7 @@ class Circuit:
                     return True
                 elif op1.j == op2.j == op0.i:  # Same target
                     return True
-        if op_i == len(self.qubit_schedules[shared_qubit]) - 3:
+        if op_i + 3 == len(self.qubit_schedules[shared_qubit]):
             op3 = self.ops[self._gate_pos[self.qubit_schedules[shared_qubit][op_i + 2]]]
             if isinstance(op3, (ZBasisMeasurement, XBasisMeasurement)) and isinstance(op1, CNOT) and isinstance(op2, CNOT):
                 if op1.i == op2.i == op3.i:  # Same control
@@ -251,12 +251,61 @@ class Circuit:
         op_bell = self.ops[gate_idx - 1]
         op_next = self.ops[gate_idx]
 
-        if not isinstance(op_bell, BellState) or not isinstance(op_next, CNOT):
+        if not isinstance(op_bell, BellState):
             return False
 
-        return op_next.i in op_bell.qubits_involved or op_next.j in op_bell.qubits_involved
+        if isinstance(op_next, TwoQubitOperation):
+            return op_next.i in op_bell.qubits_involved or op_next.j in op_bell.qubits_involved
+
+        if isinstance(op_next, SingleQubitOperation):
+            return op_next.i in op_bell.qubits_involved
+
+        return False
 
     def apply_bell_push(self, gate_idx: int) -> bool:
+        op_next = self.ops[gate_idx]
+        if isinstance(op_next, SingleQubitOperation):
+            return self.apply_bell_push_1(gate_idx)
+        if isinstance(op_next, TwoQubitOperation):
+            return self.apply_bell_push_2(gate_idx)
+        return False
+
+    def apply_bell_push_1(self, gate_idx: int) -> bool:
+        if not self.can_bell_push(gate_idx):
+            return False
+
+        op_bell = self.ops[gate_idx - 1]
+        op_next = self.ops[gate_idx]
+
+        if not isinstance(op_next, (ZBasisMeasurement, XBasisMeasurement)):
+            return False
+
+        old_qubit = op_next.i
+        [new_qubit] = set(op_bell.qubits_involved) - {old_qubit}
+
+        new_op: StatePreparation
+        if isinstance(op_next, ZBasisMeasurement):
+            new_op = ZState(new_qubit)
+        else:
+            new_op = XState(new_qubit)
+
+        bell_uid = op_bell.uid
+        new_uid = new_op.uid
+
+        self._remove_op(op_next)
+
+        del self._gate_pos[bell_uid]
+
+        self.ops[gate_idx - 1] = new_op
+        self._gate_pos[new_uid] = gate_idx - 1
+
+        self.qubit_schedules[old_qubit].remove(bell_uid)
+        s_idx_target = self.qubit_schedules[new_qubit].index(bell_uid)
+        self.qubit_schedules[new_qubit][s_idx_target] = new_uid
+
+        return True
+
+    def apply_bell_push_2(self, gate_idx: int) -> bool:
         """
         Rule 2: Bell commutation.
         Pattern: BELL(a,b); CNOT(a,c)
@@ -268,7 +317,7 @@ class Circuit:
         op_bell = self.ops[gate_idx - 1]
         op_next = self.ops[gate_idx]
 
-        if not isinstance(op_bell, BellState) or not isinstance(op_next, CNOT):
+        if not isinstance(op_next, CNOT):
             return False
 
         bell_qubits = set(op_bell.qubits_involved)
@@ -363,6 +412,7 @@ class Circuit:
 
     def to_pyzx_circuit(self):
         state_preps, gates = [], []
+        indices = set()
 
         for op in self.ops:
             if isinstance(op, BellState):
@@ -370,6 +420,7 @@ class Circuit:
                 state_preps.append(ZState(op.j))
             elif isinstance(op, StatePreparation):
                 state_preps.append(op)
+            indices = indices | set(op.qubits_involved)
         state_preps.sort()
 
         for op in self.ops:
@@ -378,9 +429,11 @@ class Circuit:
             elif isinstance(op, BellState):
                 gates.append(CNOT(op.i, op.j))
 
+        to_index = {ix: i for i, ix in enumerate(sorted(list(indices)))}
+
         circ = zx.Circuit(self.n_data)
         for op in state_preps + gates:
-            op.add_to_pyzx_circuit(circ)
+            op.add_to_pyzx_circuit(circ, to_index)
         return circ
 
     @classmethod
@@ -426,7 +479,7 @@ class Circuit:
                 self.apply_bell_push(gate_idx)
 
 
-if __name__ == "__main__":
+def test_manual_bell_bend():
     h1 = [8, 9, 10, 12, 14]
     cnots_list = [
         (8, 7), (12, 11), (10, 13), (12, 13), (9, 11), (10, 7), (8, 11), (9, 10), (14, 8), (14, 10), (14, 12),
@@ -434,19 +487,23 @@ if __name__ == "__main__":
     ]
     h2 = [14]
 
-
     circuit = Circuit.from_list(7, 8, h1, h2, cnots_list)
-    zx.draw_matplotlib(circuit.to_pyzx_circuit(), figsize=(8, 10))
     pprint(circuit.ops)
+    zx.draw_matplotlib(circuit.to_pyzx_circuit(), figsize=(8, 10))
 
     circuit.try_bend_at_bel_state(2, False)
-    zx.draw_matplotlib(circuit.to_pyzx_circuit(), figsize=(8, 10))
     pprint(circuit.ops)
+    print(circuit)
+    zx.draw_matplotlib(circuit.to_pyzx_circuit(), figsize=(8, 10))
 
     circuit.try_bend_at_bel_state(3, False)
-    zx.draw_matplotlib(circuit.to_pyzx_circuit(), figsize=(8, 10))
     pprint(circuit.ops)
+    zx.draw_matplotlib(circuit.to_pyzx_circuit(), figsize=(8, 10))
 
     circuit.try_bend_at_bel_state(2, True)
     zx.draw_matplotlib(circuit.to_pyzx_circuit(), figsize=(8, 10))
     pprint(circuit.ops)
+
+
+if __name__ == "__main__":
+    test_manual_bell_bend()
