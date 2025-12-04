@@ -477,9 +477,20 @@ class Circuit:
             gate_idx = self.cluster_bubble_left(self._gate_pos[gate], bell_idx)
             if self.can_bell_push(gate_idx):
                 self.apply_bell_push(gate_idx)
+            else:
+                return False
+        return True
+
+    def greedy_bend(self):
+        bell_candidates = [o.uid for o in self.ops if isinstance(o, BellState)]
+        while bell_candidates:
+            bend_at = bell_candidates.pop(-1)
+            if self.try_bend_at_bel_state(self._gate_pos[bend_at], push_to_top=False):
+                continue
+            self.try_bend_at_bel_state(self._gate_pos[bend_at], push_to_top=True)
 
 
-def test_manual_bell_bend():
+def steane_code():
     h1 = [8, 9, 10, 12, 14]
     cnots_list = [
         (8, 7), (12, 11), (10, 13), (12, 13), (9, 11), (10, 7), (8, 11), (9, 10), (14, 8), (14, 10), (14, 12),
@@ -487,7 +498,21 @@ def test_manual_bell_bend():
     ]
     h2 = [14]
 
-    circuit = Circuit.from_list(7, 8, h1, h2, cnots_list)
+    return Circuit.from_list(7, 8, h1, h2, cnots_list)
+
+
+def code_15_7_3():
+    h1 = [17, 18, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 31]
+    cnots = [(25, 15), (15, 16), (22, 16), (18, 27), (21, 25), (23, 16), (19, 26), (26, 18), (28, 26), (24, 23), (29, 15), (25, 27), (18, 16), (20, 21), (15, 26), (21, 15), (22, 15), (16, 25), (26, 16), (24, 19), (17, 19), (19, 20)]
+    flag_cnots = [(30, 15), (30, 24), (30, 25), (31, 19), (31, 23), (31, 26)]
+    transversals = [(0, 15), (1, 16), (2, 17), (3, 18), (4, 19), (5, 20), (6, 21), (7, 22), (8, 23), (9, 24), (10, 25), (11, 26), (12, 27), (13, 28), (14, 29)]
+    h2 = [30, 31]
+
+    return Circuit.from_list(15, 17, h1, h2, cnots + flag_cnots + transversals)
+
+
+def test_manual_bell_bend():
+    circuit = steane_code()
     pprint(circuit.ops)
     zx.draw_matplotlib(circuit.to_pyzx_circuit(), figsize=(8, 10))
 
@@ -505,5 +530,16 @@ def test_manual_bell_bend():
     pprint(circuit.ops)
 
 
+def test_greedy_bend(code):
+    circuit = code()
+    pprint(circuit.ops)
+    zx.draw_matplotlib(circuit.to_pyzx_circuit(), figsize=(8, 10))
+
+    circuit.greedy_bend()
+    pprint(circuit.ops)
+    zx.draw_matplotlib(circuit.to_pyzx_circuit(), figsize=(8, 10))
+
+
 if __name__ == "__main__":
-    test_manual_bell_bend()
+    test_greedy_bend(code_15_7_3)
+
