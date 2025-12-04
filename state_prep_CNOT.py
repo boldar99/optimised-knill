@@ -299,6 +299,9 @@ class CSSState:
                     return False
         return True
 
+    def tolist(self):
+        return [str(s) for s in self.stabs]
+
 
 if __name__ == "__main__":
     H_x_422 = H_z_422 = [[1, 1, 1, 1]]
