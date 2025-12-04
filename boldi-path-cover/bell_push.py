@@ -119,6 +119,50 @@ class Circuit:
             if op.uid in self.qubit_schedules[q]:
                 self.qubit_schedules[q].remove(op.uid)
 
+    def _replace_op(self, op: Operation, new_op: Operation):
+        """
+        Replaces 'op' with 'new_op' at the exact same global index.
+        Updates self.ops, self._gate_pos, and self.qubit_schedules.
+        """
+        if op.uid not in self._gate_pos:
+            return
+        if new_op.uid in self._gate_pos:
+            raise ValueError(f"Operation with uid {new_op.uid} already exists in circuit.")
+
+
+        idx = self._gate_pos[op.uid]
+        self.ops[idx] = new_op
+
+        del self._gate_pos[op.uid]
+        self._gate_pos[new_op.uid] = idx
+
+        # Update Qubit Schedules
+        # A. Remove old op from its specific qubit schedules
+        for q in op.qubits_involved:
+            if op.uid in self.qubit_schedules[q]:
+                self.qubit_schedules[q].remove(op.uid)
+
+        # B. Insert new op into its specific qubit schedules
+        # We must insert it in the correct order relative to other gates on that qubit.
+        for q in new_op.qubits_involved:
+            sched = self.qubit_schedules[q]
+            inserted = False
+
+            # Iterate through the schedule to find where the global index 'idx' fits
+            for i, existing_uid in enumerate(sched):
+                # Retrieve global position of the existing gate on this qubit
+                existing_global_pos = self._gate_pos[existing_uid]
+
+                # If we find a gate that happens *after* our new gate, insert before it
+                if existing_global_pos > idx:
+                    sched.insert(i, new_op.uid)
+                    inserted = True
+                    break
+
+            # If no later gate was found, the new gate goes at the end of the schedule
+            if not inserted:
+                sched.append(new_op.uid)
+
     def _register_op(self, op: Operation):
         """Internal: registers a new operation at the end of the circuit."""
         pos = len(self.ops)
@@ -289,19 +333,8 @@ class Circuit:
         else:
             new_op = XState(new_qubit)
 
-        bell_uid = op_bell.uid
-        new_uid = new_op.uid
-
         self._remove_op(op_next)
-
-        del self._gate_pos[bell_uid]
-
-        self.ops[gate_idx - 1] = new_op
-        self._gate_pos[new_uid] = gate_idx - 1
-
-        self.qubit_schedules[old_qubit].remove(bell_uid)
-        s_idx_target = self.qubit_schedules[new_qubit].index(bell_uid)
-        self.qubit_schedules[new_qubit][s_idx_target] = new_uid
+        self._replace_op(op_bell, new_op)
 
         return True
 
@@ -481,6 +514,37 @@ class Circuit:
                 return False
         return True
 
+    def try_reduce_non_local_cnot(self, qubit_idx: int):
+        qubit_ops = self.qubit_schedules[qubit_idx]
+        if len(qubit_ops) != 4:
+            return False
+
+        [state, cn1, cn2, meas] = tuple(self.ops[self._gate_pos[o]] for o in qubit_ops)
+        if not(
+            isinstance(state, (ZState, XState)) and
+            isinstance(cn1, CNOT) and  isinstance(cn2, CNOT)
+            and isinstance(meas, (ZBasisMeasurement, XBasisMeasurement))
+        ):
+            return False
+
+        self.cluster_bubble_left(self._gate_pos[qubit_ops[2]], self._gate_pos[qubit_ops[1]])
+        if self._gate_pos[qubit_ops[2]] != self._gate_pos[qubit_ops[1]] + 1:
+            return False
+
+        if cn1.i == cn2.j == qubit_idx:
+            new_cnot = CNOT(cn2.i, cn1.j)
+        elif cn1.j == cn2.i == qubit_idx:
+            new_cnot = CNOT(cn1.i, cn2.j)
+        else:
+            return False
+
+        self._remove_op(meas)
+        self._remove_op(cn2)
+        self._replace_op(cn1, new_cnot)
+        self._remove_op(state)
+
+        return True
+
     def greedy_bend(self):
         bell_candidates = [o.uid for o in self.ops if isinstance(o, BellState)]
         while bell_candidates:
@@ -488,6 +552,11 @@ class Circuit:
             if self.try_bend_at_bel_state(self._gate_pos[bend_at], push_to_top=False):
                 continue
             self.try_bend_at_bel_state(self._gate_pos[bend_at], push_to_top=True)
+
+    def greedy_reduce_nonlocal_cnot(self):
+        for i, qubits in enumerate(self.qubit_schedules):
+            if len(qubits) == 4:
+                self.try_reduce_non_local_cnot(i)
 
 
 def steane_code():
@@ -514,32 +583,44 @@ def code_15_7_3():
 def test_manual_bell_bend():
     circuit = steane_code()
     pprint(circuit.ops)
-    zx.draw_matplotlib(circuit.to_pyzx_circuit(), figsize=(8, 10))
+    zx.draw_matplotlib(circuit.to_pyzx_circuit(), figsize=(10, 12))
 
     circuit.try_bend_at_bel_state(2, False)
     pprint(circuit.ops)
     print(circuit)
-    zx.draw_matplotlib(circuit.to_pyzx_circuit(), figsize=(8, 10))
+    zx.draw_matplotlib(circuit.to_pyzx_circuit(), figsize=(10, 12))
 
     circuit.try_bend_at_bel_state(3, False)
     pprint(circuit.ops)
-    zx.draw_matplotlib(circuit.to_pyzx_circuit(), figsize=(8, 10))
+    zx.draw_matplotlib(circuit.to_pyzx_circuit(), figsize=(10, 12))
 
     circuit.try_bend_at_bel_state(2, True)
-    zx.draw_matplotlib(circuit.to_pyzx_circuit(), figsize=(8, 10))
+    zx.draw_matplotlib(circuit.to_pyzx_circuit(), figsize=(10, 12))
     pprint(circuit.ops)
 
 
 def test_greedy_bend(code):
     circuit = code()
     pprint(circuit.ops)
-    zx.draw_matplotlib(circuit.to_pyzx_circuit(), figsize=(8, 10))
+    zx.draw_matplotlib(circuit.to_pyzx_circuit(), figsize=(10, 12))
 
     circuit.greedy_bend()
     pprint(circuit.ops)
-    zx.draw_matplotlib(circuit.to_pyzx_circuit(), figsize=(8, 10))
+    zx.draw_matplotlib(circuit.to_pyzx_circuit(), figsize=(10, 12))
+
+    return circuit
+
+
+def test_greedy_opt(code):
+    circuit = test_greedy_bend(code)
+
+    circuit.greedy_reduce_nonlocal_cnot()
+    pprint(circuit.ops)
+    zx.draw_matplotlib(circuit.to_pyzx_circuit(), figsize=(10, 12))
+
+    return circuit
 
 
 if __name__ == "__main__":
-    test_greedy_bend(code_15_7_3)
+    test_greedy_opt(code_15_7_3)
 
