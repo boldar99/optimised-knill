@@ -580,6 +580,15 @@ def code_15_7_3():
     return Circuit.from_list(15, 17, h1, h2, cnots + flag_cnots + transversals)
 
 
+def code_8_3_2():
+    h1 = [8, 11, 14, 15]
+    cnots = [(8, 9), (11, 10), (9, 13), (10, 8), (15, 11), (11, 9), (13, 12), (14, 15), (15, 13), (14, 12)]
+    transverals = [(0, 8), (1, 9), (2, 10), (3, 11), (4, 12), (5, 13), (6, 14), (7, 15)]
+
+    return Circuit.from_list(8, 8, h1, [], cnots + transverals)
+
+
+
 def test_manual_bell_bend():
     circuit = steane_code()
     pprint(circuit.ops)
@@ -623,4 +632,3 @@ def test_greedy_opt(code):
 
 if __name__ == "__main__":
     test_greedy_opt(code_15_7_3)
-
