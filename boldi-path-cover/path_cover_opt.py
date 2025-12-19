@@ -1,9 +1,12 @@
 import copy
+import itertools
 from collections import defaultdict
+from pprint import pprint
 
 import matplotlib.pyplot as plt
 import networkx as nx
 import pyzx as zx
+import stim
 
 from code_examples import *
 
@@ -111,16 +114,8 @@ def visualize_path_cover(G, pos, node_types, paths):
     plt.show()
 
 
-def check_causal_flow(G, paths_dict):
-    """
-    Checks if a set of directed paths on an undirected graph forms a valid
-    Causal Flow.
+def construct_flow_graph(G, paths_dict) -> nx.DiGraph:
 
-    The condition requires that for every directed step u -> v in the paths:
-    1. u must precede v (u < v).
-    2. u must precede ALL neighbors of v (except u itself).
-       (i.e., if v 'corrects' u, then v's interactions must happen after u).
-    """
     constraint_graph = nx.DiGraph()
     constraint_graph.add_nodes_from(G.nodes())
 
@@ -136,7 +131,127 @@ def check_causal_flow(G, paths_dict):
                 if neighbor != u:
                     constraint_graph.add_edge(u, neighbor)
 
+    return constraint_graph
+
+
+def check_causal_flow(G, paths_dict):
+    """
+    Checks if a set of directed paths on an undirected graph forms a valid
+    Causal Flow.
+
+    The condition requires that for every directed step u -> v in the paths:
+    1. u must precede v (u < v).
+    2. u must precede ALL neighbors of v (except u itself).
+       (i.e., if v 'corrects' u, then v's interactions must happen after u).
+    """
+    constraint_graph = construct_flow_graph(G, paths_dict)
     return nx.is_directed_acyclic_graph(constraint_graph)
+
+
+def insert_empty_spiders(G, pos, node_types, paths_dict):
+    next_free_id = max(G.nodes()) + 1
+
+    all_path_edges = []
+    firsts, lasts = {}, {}
+    for q, p in paths_dict.items():
+        all_path_edges += [sorted_pair(v1, v2) for v1, v2 in zip(p, p[1:])]
+        firsts[p[0]] = q
+        lasts[p[-1]] = q
+
+    for u, v in list(G.edges()):
+        is_parity_measurement = node_types[u] == node_types[v] and sorted_pair(u, v) not in all_path_edges
+        if is_parity_measurement:
+            G.remove_edge(u, v)
+            G.add_node(next_free_id)
+            G.add_edge(u, next_free_id)
+            G.add_edge(next_free_id, v)
+            node_types[next_free_id] = zx.VertexType.Z if node_types[u] == zx.VertexType.X else zx.VertexType.X
+            (x_u, y_u) = pos[u]
+            (x_v, y_v) = pos[v]
+            pos[next_free_id] = ((x_u + x_v) / 2, (y_u + y_v) / 2)
+
+            if u in firsts:
+                paths_dict[firsts[u]].insert(0, next_free_id)
+                del firsts[u]
+            elif v in firsts:
+                paths_dict[firsts[v]].insert(0, next_free_id)
+                del firsts[v]
+            elif u in lasts:
+                paths_dict[lasts[u]].append(next_free_id)
+                del lasts[u]
+            elif v in lasts:
+                paths_dict[lasts[v]].append(next_free_id)
+                del lasts[v]
+            else:
+                raise ValueError("Mid circuit ZZ/XX measurement")
+
+            next_free_id += 1
+
+
+def find_total_ordering(G, pos, node_types, paths_dict):
+    ordered_operations = []
+
+    qubits = list(paths_dict.keys())
+    qubits.sort()
+    qubit_to_qubit = {q: i for i, q in enumerate(qubits)}
+
+    node_to_qubit = {}
+    firsts, lasts = [], []
+    for q, p in paths_dict.items():
+        for u in p:
+            node_to_qubit[u] = qubit_to_qubit[q]
+        if node_types[p[0]] == zx.VertexType.Z:
+            ordered_operations.append(("H", qubit_to_qubit[q]))
+        lasts.append(p[-1])
+
+    path_edges = [[sorted_pair(v1, v2) for v1, v2 in zip(p, p[1:])] for p in paths_dict.values()]
+    all_path_edges = list(itertools.chain(*path_edges))
+
+    constraint_graph = construct_flow_graph(G, paths_dict)
+    for n in G.nodes():
+        if node_types[n] == zx.VertexType.BOUNDARY:
+            constraint_graph.remove_node(n)
+
+    processed_edges = set()
+
+    in_degree = {n: d for n, d in constraint_graph.in_degree()}
+    sources = [n for n in constraint_graph.nodes() if in_degree[n] == 0]
+
+    while len(constraint_graph.nodes()) > 0:
+        for s in sources:
+            constraint_graph.remove_node(s)
+
+            neighbors = sorted(G.neighbors(s), key=lambda n: int(node_types[n] == node_types[s]))
+
+            qs = node_to_qubit[s]
+            ts = node_types[s]
+
+            for i, n in enumerate(neighbors):
+                if node_types[n] == zx.VertexType.BOUNDARY:
+                    continue
+
+                edge = sorted_pair(s, n)
+                if edge in all_path_edges or edge in processed_edges:
+                    continue
+
+                qn = node_to_qubit[n]
+                tn = node_types[n]
+
+                if ts != tn:
+                    if ts == zx.VertexType.Z:
+                        ordered_operations.append(("CNOT", (qs, qn)))
+                    else:
+                        ordered_operations.append(("CNOT", (qn, qs)))
+
+                processed_edges.add(edge)
+
+            if s in lasts:
+                if ts == zx.VertexType.Z:
+                    ordered_operations.append(("H", qs))
+                ordered_operations.append(("M", qs))
+
+        sources = [n for n, d in dict(constraint_graph.in_degree).items() if d == 0]
+    return ordered_operations
 
 
 def sorted_pair(v1, v2):
@@ -160,7 +275,6 @@ def num_parity_measurement(G, paths_dict, node_types):
         if node_types[v] == node_types[w]:
             sum += 1
     return sum
-
 
 
 def bell_bends(G, paths):
@@ -216,9 +330,39 @@ def greedy_bend(G, paths, node_types):
 
         if can_bend:
             paths = new_paths_candidate
-        visualize_path_cover(G, pos, node_types, paths)
+        # visualize_path_cover(G, pos, node_types, paths)
 
     return paths
+
+
+def realign_pos(pos, paths) -> None:
+    ys = [pos[path[0]][1] for path in paths.values()]
+    ys.sort()
+    y_mapping = {y: i for i, y in enumerate(ys)}
+
+    for path in paths.values():
+        xs = [pos[n][0] for n in path]
+        xs.sort()
+        for i in range(len(xs) - 1):
+            if xs[i] == xs[i + 1]:
+                xs[i + 1] += 1
+        for i in range(len(xs) - 1):
+            if xs[i] == xs[i + 1]:
+                xs[i + 1] += 1
+
+        y = y_mapping[pos[path[0]][1]]
+
+        for p, x in zip(path, xs):
+            pos[p] = (x, y)
+
+
+def extract_circuit(G, pos, node_types, paths):
+    ops = find_total_ordering(G, pos, node_types, paths)
+    circ = stim.Circuit()
+    for txt, qbts in ops:
+        circ.append(txt, qbts)
+    return circ
+
 
 if __name__ == '__main__':
     diagram = steane_code().to_graph()
@@ -227,6 +371,14 @@ if __name__ == '__main__':
     paths = trivial_paths(G, qubit_indices, pos)
     visualize_path_cover(G, pos, node_types, paths)
     new_paths = greedy_bend(G, paths, node_types)
+    realign_pos(pos, new_paths)
     visualize_path_cover(G, pos, node_types, new_paths)
-    print(len(new_paths))
+    c = extract_circuit(G, pos, node_types, new_paths)
+    c.diagram('timeline-svg-html')
+    plt.show()
+    # for path_i, path in paths.items():
+    #     path_str = " - ".join([f"({n})" for n in path])
+    #     print(f"{path_i}: " + path_str)
+    # pprint(paths)
+    # pprint(pos)
 
