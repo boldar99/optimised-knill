@@ -104,8 +104,8 @@ def visualize_path_cover(G, pos, node_types, paths):
     node_colors = [type_to_color[node_types[n]] for n in G.nodes()]
 
     # Plotting
-    plt.figure(figsize=(10, 8))
-    nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=200, edgecolors='black')
+    plt.figure(figsize=(12, 10))
+    nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=150, edgecolors='black')
     nx.draw_networkx_edges(G, pos, edgelist=G.edges(),
                            edge_color='gray', alpha=0.8)
     nx.draw_networkx_edges(G, pos, edgelist=world_line_edges,
@@ -149,6 +149,7 @@ def check_causal_flow(G, paths_dict):
 
 
 def insert_empty_spiders(G, pos, node_types, paths_dict):
+    # TODO: make sure the new paths are casual
     next_free_id = max(G.nodes()) + 1
 
     all_path_edges = []
@@ -218,6 +219,8 @@ def find_total_ordering(G, pos, node_types, paths_dict):
     sources = [n for n in constraint_graph.nodes() if in_degree[n] == 0]
 
     while len(constraint_graph.nodes()) > 0:
+        if len(sources) == 0:
+            raise ValueError("No solution found")
         for s in sources:
             constraint_graph.remove_node(s)
 
@@ -298,37 +301,37 @@ def bell_bends(G, paths):
 def try_apply_bell_bend(G, paths, i, j):
     new_paths = copy.deepcopy(paths)
     merged_path = list(reversed(paths[i])) + paths[j]
-    del new_paths[j]
-    new_paths[i] = merged_path
 
+    del new_paths[i]
+    new_paths[j] = merged_path
     if check_causal_flow(G, new_paths):
         return new_paths
 
-    new_paths[i].reverse()
+    del new_paths[j]
+    new_paths[i] = list(reversed(merged_path))
     if check_causal_flow(G, new_paths):
         return new_paths
 
     return None
 
 
-def greedy_bend(G, paths, node_types):
-    can_bend = True
-    while can_bend:
-        can_bend = False
+def greedy_bend(G, pos, node_types, paths):
+    new_paths_candidate = {}
+    while new_paths_candidate is not None:
+        new_paths_candidate = None
         min_pcheck = num_parity_measurement(G, paths, node_types)
 
         for bend_at in bell_bends(G, paths):
             new_paths = try_apply_bell_bend(G, paths, *bend_at)
 
             if new_paths is not None:
-                can_bend = True
                 new_paths_candidate = new_paths
 
                 num_pcheck = num_parity_measurement(G, new_paths_candidate, node_types)
                 if num_pcheck < min_pcheck:
                     break
 
-        if can_bend:
+        if new_paths_candidate is not None:
             paths = new_paths_candidate
         # visualize_path_cover(G, pos, node_types, paths)
 
@@ -350,13 +353,16 @@ def realign_pos(pos, paths) -> None:
             if xs[i] == xs[i + 1]:
                 xs[i + 1] += 1
 
-        y = y_mapping[pos[path[0]][1]]
+        y = min([pos[n][1] for n in path])
 
         for p, x in zip(path, xs):
             pos[p] = (x, y)
 
 
 def extract_circuit(G, pos, node_types, paths):
+    if not check_causal_flow(G, paths):
+        raise ValueError("Circuit must have causal flow.")
+
     ops = find_total_ordering(G, pos, node_types, paths)
     circ = stim.Circuit()
     for txt, qbts in ops:
@@ -365,20 +371,17 @@ def extract_circuit(G, pos, node_types, paths):
 
 
 if __name__ == '__main__':
-    diagram = steane_code().to_graph()
+    diagram = code_15_7_3().to_graph()
     basic_FE_opt(diagram)
     G, pos, node_types, qubit_indices = zx_diagram_to_networkx_graph(diagram)
     paths = trivial_paths(G, qubit_indices, pos)
-    visualize_path_cover(G, pos, node_types, paths)
-    new_paths = greedy_bend(G, paths, node_types)
-    realign_pos(pos, new_paths)
-    visualize_path_cover(G, pos, node_types, new_paths)
-    c = extract_circuit(G, pos, node_types, new_paths)
-    c.diagram('timeline-svg-html')
-    plt.show()
-    # for path_i, path in paths.items():
-    #     path_str = " - ".join([f"({n})" for n in path])
-    #     print(f"{path_i}: " + path_str)
-    # pprint(paths)
-    # pprint(pos)
 
+    new_paths = greedy_bend(G, pos, node_types, paths)
+    visualize_path_cover(G, pos, node_types, new_paths)
+
+    insert_empty_spiders(G, pos, node_types, new_paths)
+    # realign_pos(pos, new_paths)
+    visualize_path_cover(G, pos, node_types, new_paths)
+
+    c = extract_circuit(G, pos, node_types, new_paths)
+    c.diagram('timeline-svg')
