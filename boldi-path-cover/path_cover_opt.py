@@ -391,10 +391,10 @@ if __name__ == '__main__':
     c = cov_graph.extract_circuit()
     svg_content = c.diagram('timeline-svg')
 
-    # png_data = cairosvg.svg2png(bytestring=svg®_content.encode('utf-8'))
+    # png_data = cairosvg.svg2png(bytestring=svg_content.encode('utf-8'))
     # image = Image.open(io.BytesIO(png_data))
     #
-    # plt.figure(figsize=(10, 6))
+    # plt.figure(figsize=(12, 10))
     # plt.imshow(image)
     # plt.axis('off')
     # plt.show()
