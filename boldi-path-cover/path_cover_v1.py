@@ -1,6 +1,6 @@
+import io
 import itertools
 from collections import defaultdict
-from pprint import pprint
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -83,22 +83,8 @@ class CoveredZXGraph:
         nx.draw_networkx_edges(self.G, self.pos, edgelist=world_line_edges,
                                edge_color='#336699', width=2, arrows=True, arrowstyle='->')
         nx.draw_networkx_labels(self.G, self.pos, font_color='white', font_size=8)
+        plt.axis('off')
         plt.show()
-
-    def _construct_flow_graph(self, paths_dict) -> nx.DiGraph:
-        constraint_graph = nx.DiGraph()
-        constraint_graph.add_nodes_from(self.G.nodes())
-
-        for path_nodes in paths_dict.values():
-            for i in range(len(path_nodes) - 1):
-                u = path_nodes[i]
-                v = path_nodes[i+1]
-                constraint_graph.add_edge(u, v)
-
-                for neighbor in self.G.neighbors(v):
-                    if neighbor != u:
-                        constraint_graph.add_edge(u, neighbor)
-        return constraint_graph
 
     def check_causal_flow(self, paths=None) -> bool:
         paths_to_check = paths if paths is not None else self.paths
@@ -117,13 +103,14 @@ class CoveredZXGraph:
             min_pcheck = self._num_parity_measurement(current_paths)
 
             for bend_at in self._bell_bends(current_paths):
-                maybe_candidate = self._try_apply_bell_bend(current_paths, *bend_at)
+                # Try to apply bend without mutating current_paths in place
+                candidate = self._try_apply_bell_bend(current_paths, *bend_at)
 
-                if maybe_candidate is not None:
-                    new_paths_candidate = maybe_candidate
-                    num_pcheck = self._num_parity_measurement(new_paths_candidate)
-
+                if candidate is not None:
+                    num_pcheck = self._num_parity_measurement(candidate)
                     if num_pcheck < min_pcheck:
+                        new_paths_candidate = candidate
+                        min_pcheck = num_pcheck
                         break
 
             if new_paths_candidate is not None:
@@ -207,9 +194,26 @@ class CoveredZXGraph:
             for p, x in zip(path, xs):
                 self.pos[p] = (x, y)
 
+    # --- Internal Helpers ---
+
     @staticmethod
     def _sorted_pair(v1, v2):
         return (v1, v2) if v1 < v2 else (v2, v1)
+
+    def _construct_flow_graph(self, paths_dict) -> nx.DiGraph:
+        constraint_graph = nx.DiGraph()
+        constraint_graph.add_nodes_from(self.G.nodes())
+
+        for path_nodes in paths_dict.values():
+            for i in range(len(path_nodes) - 1):
+                u = path_nodes[i]
+                v = path_nodes[i+1]
+                constraint_graph.add_edge(u, v)
+
+                for neighbor in self.G.neighbors(v):
+                    if neighbor != u:
+                        constraint_graph.add_edge(u, neighbor)
+        return constraint_graph
 
     def _get_uncovered_edges(self, paths):
         all_edges = set(self._sorted_pair(u, v) for u, v in self.G.edges())
@@ -333,6 +337,8 @@ class CoveredZXGraph:
         return ordered_operations
 
 
+# --- Setup Functions (Generators) ---
+
 def build_zx_circuit(n_data: int, n_ancillae: int, h1, h2, cnots):
     circ = zx.Circuit(n_data)
 
@@ -370,21 +376,25 @@ def code_8_3_2():
 
 
 if __name__ == '__main__':
-    diagram = code_15_7_3().to_graph()
-    zx.draw_matplotlib(diagram, labels=True, figsize=(12, 10))
+    # Create the ZX Diagram
+    diagram = steane_code().to_graph()
 
-
+    # Pre-process using the static method
     CoveredZXGraph.preprocess_diagram(diagram)
+
+    # Instantiate the wrapper
     cov_graph = CoveredZXGraph.from_zx_diagram(diagram)
 
+    # Initial Visualization
     cov_graph.visualize()
 
     # Run Optimization
     cov_graph.greedy_bend()
     cov_graph.visualize()
 
+    # Mutate Graph
     cov_graph.insert_empty_spiders()
-    cov_graph.realign_pos()
+    cov_graph.realign_pos() # Optional realignment
     cov_graph.visualize()
 
     # Extract Circuit
