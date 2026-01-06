@@ -371,8 +371,8 @@ def code_8_3_2():
 
 if __name__ == '__main__':
     diagram = code_15_7_3().to_graph()
-    zx.draw_matplotlib(diagram, labels=True, figsize=(12, 10))
-
+    cov_graph = CoveredZXGraph.from_zx_diagram(diagram)
+    cov_graph.visualize()
 
     CoveredZXGraph.preprocess_diagram(diagram)
     cov_graph = CoveredZXGraph.from_zx_diagram(diagram)
