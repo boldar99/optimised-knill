@@ -7,6 +7,8 @@ import networkx as nx
 import pyzx as zx
 import stim
 
+from pyzx.rewrite_rules import remove_id, fuse
+
 from code_examples import *
 
 
@@ -63,11 +65,11 @@ class CoveredZXGraph:
         for v in diagram.vertex_set():
             if diagram.vertex_degree(v) == 1 and diagram.type(v) != zx.VertexType.BOUNDARY:
                 [n] = diagram.neighbors(v)
-                zx.basicrules.fuse(diagram, n, v)
+                fuse(diagram, n, v)
 
         for v in diagram.vertex_set():
             if diagram.vertex_degree(v) == 2 and diagram.type(v) != zx.VertexType.BOUNDARY:
-                zx.basicrules.remove_id(diagram, v)
+                remove_id(diagram, v)
 
     def visualize(self):
         world_line_edges = []
@@ -76,7 +78,7 @@ class CoveredZXGraph:
 
         node_colors = [self.TYPE_COLORS[self.node_types[n]] for n in self.G.nodes()]
 
-        plt.figure(figsize=(12, 10))
+        plt.figure(figsize=(18, 15))
         nx.draw_networkx_nodes(self.G, self.pos, node_color=node_colors, node_size=150, edgecolors='black')
         nx.draw_networkx_edges(self.G, self.pos, edgelist=self.G.edges(),
                                edge_color='gray', alpha=0.8)
@@ -173,7 +175,8 @@ class CoveredZXGraph:
                     self.paths[lasts[v]].append(next_free_id)
                     del lasts[v]
                 else:
-                    raise ValueError("Mid circuit ZZ/XX measurement")
+                    new_path_key = max(self.paths.keys()) + 1
+                    self.paths[new_path_key] = [next_free_id]
 
                 next_free_id += 1
 
@@ -352,7 +355,6 @@ def build_zx_circuit(n_data: int, n_ancillae: int, h1, h2, cnots):
             circ.add_gate("PostSelect", label=i, basis="Z")
 
     return circ
-
 
 def steane_code():
     h1, cnots_list, h2 = steane_code_gates()
