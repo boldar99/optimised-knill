@@ -7,8 +7,6 @@ import networkx as nx
 import pyzx as zx
 import stim
 
-from pyzx.rewrite_rules import remove_id, fuse
-
 from code_examples import *
 
 
@@ -60,16 +58,68 @@ class CoveredZXGraph:
 
         return cls(G, pos, node_types, qubit_indices, dict(paths))
 
-    @staticmethod
-    def preprocess_diagram(diagram: zx.Graph):
-        for v in diagram.vertex_set():
-            if diagram.vertex_degree(v) == 1 and diagram.type(v) != zx.VertexType.BOUNDARY:
-                [n] = diagram.neighbors(v)
-                fuse(diagram, n, v)
+    def _purge_vertex_information(self, v):
+        del self.pos[v]
+        del self.node_types[v]
+        del self.qubit_indices[v]
+        for id, path in list(self.paths.items()):
+            if v in path:
+                path.remove(v)
+            if len(path) == 0:
+                del self.paths[id]
 
-        for v in diagram.vertex_set():
-            if diagram.vertex_degree(v) == 2 and diagram.type(v) != zx.VertexType.BOUNDARY:
-                remove_id(diagram, v)
+
+    def fuse(self, u, v):
+        if not(self.G.has_edge(u, v)
+                and self.node_types[u] == self.node_types[v]
+                and self.node_types[u] in (zx.VertexType.X, zx.VertexType.Z)):
+            return False
+
+        self.G.remove_edge(u, v)
+        u_neighbors = list(self.G.neighbors(u))
+        self.G.remove_node(u)
+        for n in u_neighbors:
+            self.G.add_edge(n, v)
+
+        self._purge_vertex_information(u)
+
+        return True
+
+    def _remove_id_check_flow(self, v):
+        paths_copy = self.paths.copy()
+        for id, path in list(self.paths.items()):
+            if v in path:
+                new_path = [p for p in path if p != v]
+                paths_copy[id] = new_path
+                return self.check_causal_flow(paths_copy)
+        return True
+
+    def remove_id(self, v, flow_preserving=True):
+        if self.G.degree(v) != 2:
+            return False
+
+        [n1, n2] = list(self.G.neighbors(v))
+        self.G.remove_node(v)
+        self.G.add_edge(n1, n2)
+
+        if flow_preserving and not self._remove_id_check_flow(v):
+            self.G.remove_edge(n1, n2)
+            self.G.add_node(v)
+            self.G.add_edge(n1, v)
+            self.G.add_edge(n2, v)
+            return False
+
+        self._purge_vertex_information(v)
+        return True
+
+    def basic_FE_rewrites(self):
+        for v in list(self.G.nodes()):
+            if self.G.degree(v) == 1 and self.node_types[v] != zx.VertexType.BOUNDARY:
+                [n] = self.G.neighbors(v)
+                self.fuse(v, n)
+
+        for v in list(self.G.nodes()):
+            self.remove_id(v)
 
     def visualize(self):
         world_line_edges = []
@@ -374,11 +424,10 @@ def code_8_3_2():
 if __name__ == '__main__':
     diagram = code_15_7_3().to_graph()
     cov_graph = CoveredZXGraph.from_zx_diagram(diagram)
+    print(len(cov_graph.paths))
     cov_graph.visualize()
 
-    CoveredZXGraph.preprocess_diagram(diagram)
-    cov_graph = CoveredZXGraph.from_zx_diagram(diagram)
-
+    cov_graph.basic_FE_rewrites()
     cov_graph.visualize()
 
     # Run Optimization
@@ -386,10 +435,10 @@ if __name__ == '__main__':
     cov_graph.visualize()
 
     cov_graph.insert_empty_spiders()
-    cov_graph.realign_pos()
     cov_graph.visualize()
 
     # Extract Circuit
+    print(len(cov_graph.paths))
     c = cov_graph.extract_circuit()
     svg_content = c.diagram('timeline-svg')
 
