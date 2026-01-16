@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import networkx as nx
 import pyzx as zx
 import stim
+import numpy as np
 
 from code_examples import *
 
@@ -28,6 +29,8 @@ class CoveredZXGraph:
         self.node_types = node_types
         self.qubit_indices = qubit_indices
         self.paths = paths
+        self._num_qubits = len([n for n in node_types.values() if n == zx.VertexType.BOUNDARY]) // 2
+        self._measurements = {p[-1]: k - self._num_qubits for k, p in paths.items() if node_types[p[-1]] != zx.VertexType.BOUNDARY}
 
     @classmethod
     def from_zx_diagram(cls, diagram: zx.Graph):
@@ -64,6 +67,12 @@ class CoveredZXGraph:
         del self.qubit_indices[v]
         for id, path in list(self.paths.items()):
             if v in path:
+                measurement_key_change = (
+                    v == path[-1] and len(path) > 1 and v in self._measurements
+                )
+                if measurement_key_change:
+                    self._measurements[path[-2]] = self._measurements[v]
+                    del self._measurements[v]
                 path.remove(v)
             if len(path) == 0:
                 del self.paths[id]
@@ -121,14 +130,14 @@ class CoveredZXGraph:
         for v in list(self.G.nodes()):
             self.remove_id(v)
 
-    def visualize(self):
+    def visualize(self, figsize=(15, 12)):
         world_line_edges = []
         for p in self.paths.values():
             world_line_edges += list(zip(p, p[1:]))
 
         node_colors = [self.TYPE_COLORS[self.node_types[n]] for n in self.G.nodes()]
 
-        plt.figure(figsize=(18, 15))
+        plt.figure(figsize=figsize)
         nx.draw_networkx_nodes(self.G, self.pos, node_color=node_colors, node_size=150, edgecolors='black')
         nx.draw_networkx_edges(self.G, self.pos, edgelist=self.G.edges(),
                                edge_color='gray', alpha=0.8)
@@ -193,8 +202,7 @@ class CoveredZXGraph:
             firsts[p[0]] = q
             lasts[p[-1]] = q
 
-        edges_to_process = list(self.G.edges())
-        for u, v in edges_to_process:
+        for u, v in list(self.G.edges()):
             is_parity = (self.node_types[u] == self.node_types[v]
                          and self._sorted_pair(u, v) not in all_path_edges)
 
@@ -220,13 +228,18 @@ class CoveredZXGraph:
                     del firsts[v]
                 elif u in lasts:
                     self.paths[lasts[u]].append(next_free_id)
+                    self._measurements[next_free_id] = self._measurements[u]
+                    del self._measurements[u]
                     del lasts[u]
                 elif v in lasts:
                     self.paths[lasts[v]].append(next_free_id)
+                    self._measurements[next_free_id] = self._measurements[v]
+                    del self._measurements[v]
                     del lasts[v]
                 else:
                     new_path_key = max(self.paths.keys()) + 1
                     self.paths[new_path_key] = [next_free_id]
+                    raise ValueError('New path')
 
                 next_free_id += 1
 
@@ -239,6 +252,10 @@ class CoveredZXGraph:
         for txt, qbts in ops:
             circ.append(txt, qbts)
         return circ
+
+    def matrix_transformation_ixs(self) -> list:
+        lasts = [p[-1] for p in self.paths.values() if self.node_types[p[-1]] != zx.VertexType.BOUNDARY]
+        return [self._measurements[v] for v in lasts if self._measurements[v] < self._num_qubits]
 
     def realign_pos(self) -> None:
         ys = [self.pos[path[0]][1] for path in self.paths.values()]
@@ -436,10 +453,13 @@ if __name__ == '__main__':
 
     cov_graph.insert_empty_spiders()
     cov_graph.visualize()
+    print(cov_graph._measurements)
 
     # Extract Circuit
     print(len(cov_graph.paths))
     c = cov_graph.extract_circuit()
+    print(code_15_7_3_stabs())
+    print(code_15_7_3_stabs()[:,cov_graph.matrix_transformation_ixs()])
     svg_content = c.diagram('timeline-svg')
 
     # png_data = cairosvg.svg2png(bytestring=svg_content.encode('utf-8'))

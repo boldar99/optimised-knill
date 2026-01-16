@@ -1,3 +1,6 @@
+import numpy as np
+
+
 def steane_code_gates():
     h1 = [8, 9, 10, 12, 14]
     cnots_list = [
@@ -7,6 +10,13 @@ def steane_code_gates():
     h2 = [14]
 
     return h1, cnots_list, h2
+
+def steane_code_stabs():
+    return np.array([
+        [1, 1, 1, 1, 0, 0, 0],
+        [0, 1, 1, 0, 1, 1, 0],
+        [0, 0, 1, 1, 0, 1, 1],
+    ], dtype=np.uint8)
 
 
 def code_15_7_3_gates():
@@ -19,9 +29,27 @@ def code_15_7_3_gates():
     return h1, cnots + flag_cnots + transversals, h2
 
 
+def code_15_7_3_stabs():
+    return np.array([
+        [0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1],
+        [0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1],
+        [0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1],
+        [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1],
+    ])
+
+
 def code_8_3_2_gates():
     h1 = [8, 11, 14, 15]
     cnots = [(8, 9), (11, 10), (9, 13), (10, 8), (15, 11), (11, 9), (13, 12), (14, 15), (15, 13), (14, 12)]
     transverals = [(0, 8), (1, 9), (2, 10), (3, 11), (4, 12), (5, 13), (6, 14), (7, 15)]
 
     return h1, cnots + transverals, []
+
+def code_8_3_2_stabs_z():
+    return np.array([
+        [1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 0, 0, 0, 0],
+        [1, 1, 0, 0, 1, 1, 0, 0],
+        [1, 0, 1, 0, 1, 0, 1, 0]
+    ])
+
