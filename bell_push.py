@@ -600,7 +600,7 @@ def test_greedy_bend(code):
     pprint(circuit.ops)
     zx.draw_matplotlib(circuit.to_pyzx_circuit(), figsize=(10, 12))
 
-    circuit.greedy_bend()
+    circuit.greedy_path_opt()
     pprint(circuit.ops)
     zx.draw_matplotlib(circuit.to_pyzx_circuit(), figsize=(10, 12))
 

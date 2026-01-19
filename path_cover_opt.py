@@ -1,12 +1,11 @@
 import itertools
 from collections import defaultdict
-from pprint import pprint
+from typing import Generator
 
 import matplotlib.pyplot as plt
 import networkx as nx
 import pyzx as zx
 import stim
-import numpy as np
 
 from code_examples import *
 
@@ -30,7 +29,8 @@ class CoveredZXGraph:
         self.qubit_indices = qubit_indices
         self.paths = paths
         self._num_qubits = len([n for n in node_types.values() if n == zx.VertexType.BOUNDARY]) // 2
-        self._measurements = {p[-1]: k - self._num_qubits for k, p in paths.items() if node_types[p[-1]] != zx.VertexType.BOUNDARY}
+        self._measurements = {p[-1]: k - self._num_qubits for k, p in paths.items() if
+                              node_types[p[-1]] != zx.VertexType.BOUNDARY}
 
     @classmethod
     def from_zx_diagram(cls, diagram: zx.Graph):
@@ -68,7 +68,7 @@ class CoveredZXGraph:
         for id, path in list(self.paths.items()):
             if v in path:
                 measurement_key_change = (
-                    v == path[-1] and len(path) > 1 and v in self._measurements
+                        v == path[-1] and len(path) > 1 and v in self._measurements
                 )
                 if measurement_key_change:
                     self._measurements[path[-2]] = self._measurements[v]
@@ -77,9 +77,8 @@ class CoveredZXGraph:
             if len(path) == 0:
                 del self.paths[id]
 
-
     def fuse(self, u, v):
-        if not(self.G.has_edge(u, v)
+        if not (self.G.has_edge(u, v)
                 and self.node_types[u] == self.node_types[v]
                 and self.node_types[u] in (zx.VertexType.X, zx.VertexType.Z)):
             return False
@@ -153,7 +152,7 @@ class CoveredZXGraph:
         for path_nodes in paths_dict.values():
             for i in range(len(path_nodes) - 1):
                 u = path_nodes[i]
-                v = path_nodes[i+1]
+                v = path_nodes[i + 1]
                 constraint_graph.add_edge(u, v)
 
                 for neighbor in self.G.neighbors(v):
@@ -166,7 +165,7 @@ class CoveredZXGraph:
         constraint_graph = self._construct_flow_graph(paths_to_check)
         return nx.is_directed_acyclic_graph(constraint_graph)
 
-    def greedy_bend(self):
+    def greedy_path_opt(self):
         """
         Iteratively improves the path cover by checking 'bell bends' (merging paths).
         """
@@ -177,20 +176,29 @@ class CoveredZXGraph:
             new_paths_candidate = None
             min_pcheck = self._num_parity_measurement(current_paths)
 
-            for bend_at in self._bell_bends(current_paths):
-                maybe_candidate = self._try_apply_bell_bend(current_paths, *bend_at)
+            for new_paths_candidate in self.all_causal_bell_bends(current_paths):
+                num_pcheck = self._num_parity_measurement(new_paths_candidate)
 
-                if maybe_candidate is not None:
-                    new_paths_candidate = maybe_candidate
-                    num_pcheck = self._num_parity_measurement(new_paths_candidate)
+                if not self.check_causal_flow(new_paths_candidate):
+                    print("PAPRIKA")
 
-                    if num_pcheck < min_pcheck:
-                        break
+                if num_pcheck < min_pcheck:
+                    break
 
             if new_paths_candidate is not None:
                 current_paths = new_paths_candidate
 
         self.paths = current_paths
+
+    def all_causal_bell_bends(self, paths=None) :
+        """
+        Returns all new paths candidates that are causal
+        """
+        current_paths = paths or self.paths
+
+        for bend_indices in self._bell_bends(current_paths):
+            for bend in self._causal_path_bends(current_paths, *bend_indices):
+                yield bend
 
     def insert_empty_spiders(self):
         next_free_id = max(self.G.nodes()) + 1
@@ -207,6 +215,8 @@ class CoveredZXGraph:
                          and self._sorted_pair(u, v) not in all_path_edges)
 
             if is_parity:
+                print(self.check_causal_flow(), u, v)
+
                 self.G.remove_edge(u, v)
                 self.G.add_node(next_free_id)
                 self.G.add_edge(u, next_free_id)
@@ -220,28 +230,46 @@ class CoveredZXGraph:
                 x_v, y_v = self.pos[v]
                 self.pos[next_free_id] = ((x_u + x_v) / 2, (y_u + y_v) / 2)
 
-                if u in firsts:
-                    self.paths[firsts[u]].insert(0, next_free_id)
-                    del firsts[u]
-                elif v in firsts:
-                    self.paths[firsts[v]].insert(0, next_free_id)
-                    del firsts[v]
-                elif u in lasts:
-                    self.paths[lasts[u]].append(next_free_id)
-                    self._measurements[next_free_id] = self._measurements[u]
-                    del self._measurements[u]
-                    del lasts[u]
-                elif v in lasts:
-                    self.paths[lasts[v]].append(next_free_id)
-                    self._measurements[next_free_id] = self._measurements[v]
-                    del self._measurements[v]
-                    del lasts[v]
-                else:
-                    new_path_key = max(self.paths.keys()) + 1
-                    self.paths[new_path_key] = [next_free_id]
-                    raise ValueError('New path')
+                self._insert_paths_single_empty_spider(u, v, firsts, lasts, next_free_id)
 
                 next_free_id += 1
+
+    def _try_insert_firsts(self, u, firsts, next_free_id):
+        if u in firsts:
+            self.paths[firsts[u]].insert(0, next_free_id)
+            if not self.check_causal_flow():
+                self.paths[firsts[u]].pop(0)
+                return False
+            del firsts[u]
+            return True
+        return False
+
+    def _try_insert_lasts(self, u, lasts, next_free_id):
+        if u in lasts:
+            self.paths[lasts[u]].append(next_free_id)
+            if not self.check_causal_flow():
+                self.paths[lasts[u]].pop(-1)
+                return False
+            else:
+                self._measurements[next_free_id] = self._measurements[u]
+                del self._measurements[u]
+                del lasts[u]
+                return True
+        return False
+
+    def _insert_paths_single_empty_spider(self, u, v, firsts: dict, lasts: dict, next_free_id: int):
+        if self._try_insert_firsts(u, firsts, next_free_id):
+            return
+        if self._try_insert_firsts(v, firsts, next_free_id):
+            return
+        if self._try_insert_lasts(u, lasts, next_free_id):
+            return
+        if self._try_insert_lasts(v, lasts, next_free_id):
+            return
+
+        new_path_key = max(self.paths.keys()) + 1
+        self.paths[new_path_key] = [next_free_id]
+        raise ValueError('New path')
 
     def extract_circuit(self) -> stim.Circuit:
         if not self.check_causal_flow():
@@ -306,10 +334,11 @@ class CoveredZXGraph:
 
         for v, w in self.G.edges():
             # Check if start of one path connects to start of another
+            # TODO: bend at lasts too
             if paths[vertex_qubit[v]][0] == v and paths[vertex_qubit[w]][0] == w:
                 yield vertex_qubit[v], vertex_qubit[w]
 
-    def _try_apply_bell_bend(self, paths, i, j):
+    def _causal_path_bends(self, paths, i, j):
         merged_path = list(reversed(paths[i])) + paths[j]
 
         new_paths_1 = paths.copy()
@@ -317,16 +346,14 @@ class CoveredZXGraph:
         new_paths_1[j] = merged_path
 
         if self.check_causal_flow(new_paths_1):
-            return new_paths_1
+            yield new_paths_1
 
         new_paths_2 = paths.copy()
         del new_paths_2[j]
         new_paths_2[i] = list(reversed(merged_path))
 
         if self.check_causal_flow(new_paths_2):
-            return new_paths_2
-
-        return None
+            yield new_paths_2
 
     def _find_total_ordering(self):
         ordered_operations = []
@@ -423,6 +450,7 @@ def build_zx_circuit(n_data: int, n_ancillae: int, h1, h2, cnots):
 
     return circ
 
+
 def steane_code():
     h1, cnots_list, h2 = steane_code_gates()
     return build_zx_circuit(7, 8, h1, h2, cnots_list)
@@ -448,7 +476,7 @@ if __name__ == '__main__':
     cov_graph.visualize()
 
     # Run Optimization
-    cov_graph.greedy_bend()
+    cov_graph.greedy_path_opt()
     cov_graph.visualize()
 
     cov_graph.insert_empty_spiders()
@@ -461,7 +489,7 @@ if __name__ == '__main__':
     print(c)
     print(code_15_7_3_stabs())
     print(cov_graph.matrix_transformation_ixs())
-    print(code_15_7_3_stabs()[:,cov_graph.matrix_transformation_ixs()])
+    print(code_15_7_3_stabs()[:, cov_graph.matrix_transformation_ixs()])
 
     # png_data = cairosvg.svg2png(bytestring=svg_content.encode('utf-8'))
     # image = Image.open(io.BytesIO(png_data))
