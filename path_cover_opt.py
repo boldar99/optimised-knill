@@ -334,8 +334,10 @@ class CoveredZXGraph:
 
         for v, w in self.G.edges():
             # Check if start of one path connects to start of another
-            # TODO: bend at lasts too
-            if paths[vertex_qubit[v]][0] == v and paths[vertex_qubit[w]][0] == w:
+            v_is_first_or_last = v in (paths[vertex_qubit[v]][0], paths[vertex_qubit[v]][-1])
+            w_is_first_or_last = w in (paths[vertex_qubit[w]][0], paths[vertex_qubit[w]][-1])
+
+            if v_is_first_or_last and w_is_first_or_last:
                 yield vertex_qubit[v], vertex_qubit[w]
 
     def _causal_path_bends(self, paths, i, j):
