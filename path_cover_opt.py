@@ -458,9 +458,10 @@ if __name__ == '__main__':
     # Extract Circuit
     print(len(cov_graph.paths))
     c = cov_graph.extract_circuit()
+    print(c)
     print(code_15_7_3_stabs())
+    print(cov_graph.matrix_transformation_ixs())
     print(code_15_7_3_stabs()[:,cov_graph.matrix_transformation_ixs()])
-    svg_content = c.diagram('timeline-svg')
 
     # png_data = cairosvg.svg2png(bytestring=svg_content.encode('utf-8'))
     # image = Image.open(io.BytesIO(png_data))
