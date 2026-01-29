@@ -1,6 +1,6 @@
+import copy
 import itertools
 from collections import defaultdict
-from typing import Generator
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -8,6 +8,8 @@ import pyzx as zx
 import stim
 
 from code_examples import *
+from codes import H_z_15_7_3, L_x_15_7_3
+from verify_fault_tolerance import list_to_str_stabs, build_css_syndrome_table, verify_extraction_circuit
 
 
 class CoveredZXGraph:
@@ -21,12 +23,10 @@ class CoveredZXGraph:
                  G: nx.Graph,
                  pos: dict[int, tuple[float, float]],
                  node_types: dict[int, zx.VertexType],
-                 qubit_indices: dict[int, int],
                  paths: dict[int, list[int]]) -> None:
         self.G = G
         self.pos = pos
         self.node_types = node_types
-        self.qubit_indices = qubit_indices
         self.paths = paths
         self._num_qubits = len([n for n in node_types.values() if n == zx.VertexType.BOUNDARY]) // 2
         self._measurements = {p[-1]: k - self._num_qubits for k, p in paths.items() if
@@ -59,12 +59,22 @@ class CoveredZXGraph:
         for path in paths.values():
             path.sort(key=lambda v: pos[v][0])
 
-        return cls(G, pos, node_types, qubit_indices, dict(paths))
+        return cls(G, pos, node_types, dict(paths))
+
+    def copy(self):
+        cg = CoveredZXGraph(
+            self.G.copy(),
+            self.pos.copy(),
+            self.node_types,
+            copy.deepcopy(self.paths),
+        )
+        cg._num_qubits = self._num_qubits
+        cg._measurements = self._measurements.copy()
+        return cg
 
     def _purge_vertex_information(self, v):
         del self.pos[v]
         del self.node_types[v]
-        del self.qubit_indices[v]
         for id, path in list(self.paths.items()):
             if v in path:
                 measurement_key_change = (
@@ -176,11 +186,8 @@ class CoveredZXGraph:
             new_paths_candidate = None
             min_pcheck = self._num_parity_measurement(current_paths)
 
-            for new_paths_candidate in self.all_causal_bell_bends(current_paths):
+            for new_paths_candidate in self.all_causal_boundary_bends(current_paths):
                 num_pcheck = self._num_parity_measurement(new_paths_candidate)
-
-                if not self.check_causal_flow(new_paths_candidate):
-                    print("PAPRIKA")
 
                 if num_pcheck < min_pcheck:
                     break
@@ -190,13 +197,13 @@ class CoveredZXGraph:
 
         self.paths = current_paths
 
-    def all_causal_bell_bends(self, paths=None) :
+    def all_causal_boundary_bends(self, paths=None):
         """
         Returns all new paths candidates that are causal
         """
         current_paths = paths or self.paths
 
-        for bend_indices in self._bell_bends(current_paths):
+        for bend_indices in self._boundary_bends(current_paths):
             for bend in self._causal_path_bends(current_paths, *bend_indices):
                 yield bend
 
@@ -215,16 +222,16 @@ class CoveredZXGraph:
                          and self._sorted_pair(u, v) not in all_path_edges)
 
             if is_parity:
-                print(self.check_causal_flow(), u, v)
-
                 self.G.remove_edge(u, v)
                 self.G.add_node(next_free_id)
                 self.G.add_edge(u, next_free_id)
                 self.G.add_edge(next_free_id, v)
 
-                self.node_types[next_free_id] = (zx.VertexType.Z
-                                                 if self.node_types[u] == zx.VertexType.X
-                                                 else zx.VertexType.X)
+                self.node_types[next_free_id] = (
+                    zx.VertexType.Z
+                    if self.node_types[u] == zx.VertexType.X
+                    else zx.VertexType.X
+                )
 
                 x_u, y_u = self.pos[u]
                 x_v, y_v = self.pos[v]
@@ -276,14 +283,33 @@ class CoveredZXGraph:
             raise ValueError("Circuit must have causal flow.")
 
         ops = self._find_total_ordering()
+        measurements = []
         circ = stim.Circuit()
         for txt, qbts in ops:
+            if txt in ("M", "MZ", "MR"):
+                measurements.append((txt, qbts))
+            else:
+                circ.append(txt, qbts)
+        measurements.sort(key=lambda x: x[1])
+        for txt, qbts in measurements:
             circ.append(txt, qbts)
+
         return circ
 
     def matrix_transformation_ixs(self) -> list:
         lasts = [p[-1] for p in self.paths.values() if self.node_types[p[-1]] != zx.VertexType.BOUNDARY]
         return [self._measurements[v] for v in lasts if self._measurements[v] < self._num_qubits]
+
+    def measurement_qubit_indices(self) -> list:
+        lasts = {i: p[-1] for i, p in self.paths.items() if self.node_types[p[-1]] != zx.VertexType.BOUNDARY}
+        path_to_qubit = self._get_path_to_qubit()
+        return [path_to_qubit[i] - self._num_qubits for i, v in lasts.items() if self._measurements[v] < self._num_qubits]
+
+    def flag_qubit_indices(self) -> list:
+        lasts = {i: p[-1] for i, p in self.paths.items() if self.node_types[p[-1]] != zx.VertexType.BOUNDARY}
+        path_to_qubit = self._get_path_to_qubit()
+        return [path_to_qubit[i] - self._num_qubits for i, v in lasts.items() if self._measurements[v] >= self._num_qubits]
+
 
     def realign_pos(self) -> None:
         ys = [self.pos[path[0]][1] for path in self.paths.values()]
@@ -326,7 +352,7 @@ class CoveredZXGraph:
                 count += 1
         return count
 
-    def _bell_bends(self, paths):
+    def _boundary_bends(self, paths):
         vertex_qubit = {}
         for k, path in paths.items():
             for v in path:
@@ -343,26 +369,29 @@ class CoveredZXGraph:
     def _causal_path_bends(self, paths, i, j):
         merged_path = list(reversed(paths[i])) + paths[j]
 
-        new_paths_1 = paths.copy()
+        new_paths_1 = copy.deepcopy(paths)
         del new_paths_1[i]
         new_paths_1[j] = merged_path
 
         if self.check_causal_flow(new_paths_1):
             yield new_paths_1
 
-        new_paths_2 = paths.copy()
+        new_paths_2 = copy.deepcopy(paths)
         del new_paths_2[j]
         new_paths_2[i] = list(reversed(merged_path))
 
         if self.check_causal_flow(new_paths_2):
             yield new_paths_2
 
+    def _get_path_to_qubit(self):
+        qubits = list(self.paths.keys())
+        qubits.sort()
+        return {q: i for i, q in enumerate(qubits)}
+
     def _find_total_ordering(self):
         ordered_operations = []
 
-        qubits = list(self.paths.keys())
-        qubits.sort()
-        qubit_to_qubit = {q: i for i, q in enumerate(qubits)}
+        qubit_to_qubit = self._get_path_to_qubit()
 
         node_to_qubit = {}
         lasts = set()
@@ -467,31 +496,66 @@ def code_8_3_2():
     h1, cnots_list, h2 = code_8_3_2_gates()
     return build_zx_circuit(8, 8, h1, h2, cnots_list)
 
+def all_good_FT_opts(
+        covered_zx_graph: CoveredZXGraph,
+        H_matrix: np.ndarray,  # Binary Matrix (num_stabilizers x num_data_qubits)
+        L_matrix: np.ndarray,  # Binary Matrix (num_logicals x num_data_qubits)
+        basis: str,  # "Z" (Measuring Z-stabs) or "X" (Measuring X-stabs)
+        d: int
+):
+    stabs = list_to_str_stabs(H_matrix)
+    decoder_table = build_css_syndrome_table(stabs, d)
+
+    yield covered_zx_graph
+    covered_graphs = [covered_zx_graph]
+    while len(covered_graphs) > 0:
+        current_graph = covered_graphs.pop(0)
+
+        for path in current_graph.all_causal_boundary_bends():
+            cov_graph = current_graph.copy()
+            cov_graph.paths = copy.deepcopy(path)
+            cov_graph.insert_empty_spiders()
+            circ = cov_graph.extract_circuit()
+            good = verify_extraction_circuit(
+                circ,
+                H_matrix,
+                L_matrix,
+                decoder_table,
+                cov_graph.flag_qubit_indices(),
+                basis,
+                d
+            )
+            if good:
+                yield cov_graph
+                covered_graphs.append(cov_graph)
+
 
 if __name__ == '__main__':
     diagram = code_15_7_3().to_graph()
     cov_graph = CoveredZXGraph.from_zx_diagram(diagram)
-    print(len(cov_graph.paths))
-    cov_graph.visualize()
-
     cov_graph.basic_FE_rewrites()
-    cov_graph.visualize()
-
-    # Run Optimization
-    cov_graph.greedy_path_opt()
-    cov_graph.visualize()
-
-    cov_graph.insert_empty_spiders()
-    cov_graph.visualize()
-    print(cov_graph._measurements)
-
-    # Extract Circuit
-    print(len(cov_graph.paths))
-    c = cov_graph.extract_circuit()
-    print(c)
-    print(code_15_7_3_stabs())
-    print(cov_graph.matrix_transformation_ixs())
-    print(code_15_7_3_stabs()[:, cov_graph.matrix_transformation_ixs()])
+    # print(len(cov_graph.paths))
+    # cov_graph.visualize()
+    #
+    # # cov_graph.visualize()
+    #
+    # # Run Optimization
+    # cov_graph.greedy_path_opt()
+    # # cov_graph.visualize()
+    #
+    # cov_graph.insert_empty_spiders()
+    # cov_graph.visualize()
+    # print(cov_graph._measurements)
+    #
+    # # Extract Circuit
+    # print(len(cov_graph.paths))
+    # c = cov_graph.extract_circuit()
+    # print(c)
+    # print(code_15_7_3_stabs())
+    # print(cov_graph._measurements)
+    # print(cov_graph.measurement_qubit_indices())
+    # print(cov_graph.flag_qubit_indices())
+    # print(code_15_7_3_stabs()[:, cov_graph.matrix_transformation_ixs()])
 
     # png_data = cairosvg.svg2png(bytestring=svg_content.encode('utf-8'))
     # image = Image.open(io.BytesIO(png_data))
@@ -500,3 +564,10 @@ if __name__ == '__main__':
     # plt.imshow(image)
     # plt.axis('off')
     # plt.show()
+    for cv in all_good_FT_opts(
+        cov_graph,
+        H_z_15_7_3,
+        L_x_15_7_3,
+        "X", 3):
+        print(len(cv.paths))
+

@@ -79,8 +79,10 @@ def verify_extraction_circuit(
         H_matrix: np.ndarray,  # Binary Matrix (num_stabilizers x num_data_qubits)
         L_matrix: np.ndarray,  # Binary Matrix (num_logicals x num_data_qubits)
         correction_table: dict,  # Your pre-computed Phase 1 table
+        flag_measurements: list[int],
         basis: str,  # "Z" (Measuring Z-stabs) or "X" (Measuring X-stabs)
-        d: int
+        d: int,
+        verbose=False,
 ):
     """
     Verifies a syndrome extraction circuit.
@@ -102,8 +104,9 @@ def verify_extraction_circuit(
         sim = stim.TableauSimulator()
         sim.do_circuit(noisy_c)
 
-        ancilla_record = np.array(sim.current_measurement_record()).astype(int)[:len(H_matrix)]
-        flag_record = np.array(sim.current_measurement_record()).astype(int)[len(H_matrix):]
+        non_flag_measurements = list(set(range(len(sim.current_measurement_record()))) - set(flag_measurements))
+        ancilla_record = np.array(sim.current_measurement_record()).astype(int)[non_flag_measurements]
+        flag_record = np.array(sim.current_measurement_record()).astype(int)[flag_measurements]
         if basis == "X":
             sim.do_circuit(stim.Circuit(f"H {' '.join(str(q) for q in range(num_data_qubits))}"))
         data_bits = np.array(sim.measure_many(*range(num_data_qubits))).astype(int)
@@ -123,12 +126,13 @@ def verify_extraction_circuit(
 
         # Since we started with Logical 0 (or +), expected logical outcome is 0.
         if np.any(logical_flip) and not np.any(flag_record):
-            print(f"LOGICAL FAILURE via Extraction Circuit!")
-            print(f"Faults: {fault_combo}")
-            print(f"Data has error: {data_bits} (Syndrome {actual_syndrome})")
-            print(f"Correction applied: {correction}")
-            print(f"Result: Logical Flip")
-            print(noisy_c)
+            if verbose:
+                print(f"LOGICAL FAILURE via Extraction Circuit!")
+                print(f"Faults: {fault_combo}")
+                print(f"Data has error: {data_bits} (Syndrome {actual_syndrome})")
+                print(f"Correction applied: {correction}")
+                print(f"Result: Logical Flip")
+                print(noisy_c)
             return False
 
     return True
@@ -205,37 +209,22 @@ def build_noisy_circuit(fault_combo: tuple[tuple[int, int], ...], fault_type: st
 
 if __name__ == "__main__":
     # Example Usage
-    stabs = list_to_str_stabs(H_x_15_7_3)
+    stabs = list_to_str_stabs(steane_code_stabs())
     print(stabs)
     decoder_table = build_css_syndrome_table(stabs, 3)
     print(decoder_table)
 
     steane_circ = stim.Circuit("""
-H 15 17 20 21 23
-CX 23 24 9 24 23 18 10 18 3 22 7 19 15 16 19 16 20 16 24 20 22 16 21 22 21 24 16 18 8 20 13 21 18 22 12 22
-M 22
-CX 2 24 1 16 15 18 14 15 17 18 15 21 24 17 5 17
-M 17
-CX 18 15 21 16
-M 16
-CX 4 24 19 15
-H 19
-M 19
-CX 24 20
-M 20
-CX 24 21
-H 24
-M 24
-CX 11 21
-M 21
-CX 6 18
-M 18
-CX 23 15 0 15
-M 15
-H 23
-M 23
-    """)
+    H 9
+    CX 9 7 6 7 0 10 2 8 7 10 8 7 9 8 3 7 10 8 4 8
+    M 8
+    CX 5 9 1 10 10 7
+    M 7
+    CX 10 9
+    H 10
+    M 10 9
+        """)
 
-    verify_extraction_circuit(steane_circ, H_x_15_7_3, L_x_15_7_3, decoder_table, "X", 3)
+    verify_extraction_circuit(steane_circ, steane_code_stabs(), np.array([0,0,0,0,1,1,1]), decoder_table, [3], "X", 3)
 
 # verify_t_fault_tolerance(steane_code(), list_to_str_stabs(steane_code_stabs()), t_faults=1)
