@@ -1,6 +1,7 @@
 import copy
 import itertools
 from collections import defaultdict
+from typing import Iterator
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -8,7 +9,6 @@ import pyzx as zx
 import stim
 
 from code_examples import *
-from codes import H_z_15_7_3, L_x_15_7_3
 from verify_fault_tolerance import list_to_str_stabs, build_css_syndrome_table, verify_extraction_circuit
 
 
@@ -31,6 +31,11 @@ class CoveredZXGraph:
         self._num_qubits = len([n for n in node_types.values() if n == zx.VertexType.BOUNDARY]) // 2
         self._measurements = {p[-1]: k - self._num_qubits for k, p in paths.items() if
                               node_types[p[-1]] != zx.VertexType.BOUNDARY}
+
+    def path_hash(self) -> int:
+        return hash(
+            tuple(sorted(tuple(sorted(v)) for v in self.paths.values()))
+        )
 
     @classmethod
     def from_zx_diagram(cls, diagram: zx.Graph):
@@ -296,7 +301,7 @@ class CoveredZXGraph:
 
         return circ
 
-    def matrix_transformation_ixs(self) -> list:
+    def matrix_transformation_indices(self) -> list:
         lasts = [p[-1] for p in self.paths.values() if self.node_types[p[-1]] != zx.VertexType.BOUNDARY]
         return [self._measurements[v] for v in lasts if self._measurements[v] < self._num_qubits]
 
@@ -502,12 +507,13 @@ def all_good_FT_opts(
         L_matrix: np.ndarray,  # Binary Matrix (num_logicals x num_data_qubits)
         basis: str,  # "Z" (Measuring Z-stabs) or "X" (Measuring X-stabs)
         d: int
-):
+) -> Iterator[CoveredZXGraph]:
     stabs = list_to_str_stabs(H_matrix)
     decoder_table = build_css_syndrome_table(stabs, d)
 
     yield covered_zx_graph
     covered_graphs = [covered_zx_graph]
+    seen = {covered_zx_graph.path_hash()}
     while len(covered_graphs) > 0:
         current_graph = covered_graphs.pop(0)
 
@@ -525,49 +531,30 @@ def all_good_FT_opts(
                 basis,
                 d
             )
-            if good:
-                yield cov_graph
+            p_hash = cov_graph.path_hash()
+            if good and p_hash not in seen:
                 covered_graphs.append(cov_graph)
+                seen.add(p_hash)
+                yield cov_graph
 
 
 if __name__ == '__main__':
-    diagram = code_15_7_3().to_graph()
+    from codes import H_z_15_7_3, L_x_15_7_3
+
+    diagram = steane_code().to_graph()
     cov_graph = CoveredZXGraph.from_zx_diagram(diagram)
     cov_graph.basic_FE_rewrites()
-    # print(len(cov_graph.paths))
-    # cov_graph.visualize()
-    #
-    # # cov_graph.visualize()
-    #
-    # # Run Optimization
-    # cov_graph.greedy_path_opt()
-    # # cov_graph.visualize()
-    #
-    # cov_graph.insert_empty_spiders()
-    # cov_graph.visualize()
-    # print(cov_graph._measurements)
-    #
-    # # Extract Circuit
-    # print(len(cov_graph.paths))
-    # c = cov_graph.extract_circuit()
-    # print(c)
-    # print(code_15_7_3_stabs())
-    # print(cov_graph._measurements)
-    # print(cov_graph.measurement_qubit_indices())
-    # print(cov_graph.flag_qubit_indices())
-    # print(code_15_7_3_stabs()[:, cov_graph.matrix_transformation_ixs()])
+    seen = set()
 
-    # png_data = cairosvg.svg2png(bytestring=svg_content.encode('utf-8'))
-    # image = Image.open(io.BytesIO(png_data))
-    #
-    # plt.figure(figsize=(12, 10))
-    # plt.imshow(image)
-    # plt.axis('off')
-    # plt.show()
     for cv in all_good_FT_opts(
-        cov_graph,
-        H_z_15_7_3,
-        L_x_15_7_3,
-        "X", 3):
+            cov_graph,
+            steane_code_stabs(),
+            np.array([0,0,0,0,1,1,1]),
+            "X", 3):
         print(len(cv.paths))
+        if len(cv.paths) == 11:
+            cv.visualize()
+            print(cv.matrix_transformation_indices())
+            print(cv.measurement_qubit_indices())
+            print(cv.flag_qubit_indices())
 
