@@ -34,7 +34,7 @@ class CoveredZXGraph:
 
     def path_hash(self) -> int:
         return hash(
-            tuple(sorted(tuple(sorted(v)) for v in self.paths.values()))
+            tuple(sorted(tuple((v)) for v in self.paths.values()))
         )
 
     @classmethod
