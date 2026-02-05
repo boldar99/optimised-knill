@@ -28,6 +28,15 @@ def steane_code():
     return build_stim_circuit(7, 8, h1, h2, cnots_list)
 
 
+
+def code_steane_SP():
+    h1, cnots_list, h2 = steane_code_gates()
+    h1 = [h - 7 for h in h1]
+    h2 = [h - 7 for h in h2]
+    cnots_list = [(c - 7, n - 7) for c, n in cnots_list if c > 6 and n > 6]
+    return build_stim_circuit(0, 8, h1, h2, cnots_list)
+
+
 def code_15_7_3():
     h1, cnots_list, h2 = code_15_7_3_gates()
     return build_stim_circuit(15, 17, h1, h2, cnots_list)
@@ -43,6 +52,13 @@ def code_15_7_3_SP():
 def code_8_3_2():
     h1, cnots_list, h2 = code_8_3_2_gates()
     return build_stim_circuit(8, 8, h1, h2, cnots_list)
+
+def code_8_3_2_SP():
+    h1, cnots_list, h2 = code_8_3_2_gates()
+    h1 = [h - 8 for h in h1]
+    h2 = [h - 8 for h in h2]
+    cnots_list = [(c - 8, n - 8) for c, n in cnots_list if c > 7 and n > 7]
+    return build_stim_circuit(0, 8, h1, h2, cnots_list)
 
 
 def build_css_syndrome_table(stabilizers: list[str], d: int):
