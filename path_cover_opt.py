@@ -28,9 +28,11 @@ class CoveredZXGraph:
         self.pos = pos
         self.node_types = node_types
         self.paths = paths
+        self.path_reversed = {p: False for p in paths}
         self._num_qubits = len([n for n in node_types.values() if n == zx.VertexType.BOUNDARY]) // 2
         self._measurements = {p[-1]: k - self._num_qubits for k, p in paths.items() if
                               node_types[p[-1]] != zx.VertexType.BOUNDARY}
+        self.removed_spiders = dict()
 
     def path_hash(self) -> int:
         return hash(
@@ -75,6 +77,8 @@ class CoveredZXGraph:
         )
         cg._num_qubits = self._num_qubits
         cg._measurements = self._measurements.copy()
+        cg.removed_spiders = copy.deepcopy(self.removed_spiders)
+        cg.path_reversed = copy.deepcopy(self.path_reversed)
         return cg
 
     def _purge_vertex_information(self, v):
@@ -117,7 +121,7 @@ class CoveredZXGraph:
                 return self.check_causal_flow(paths_copy)
         return True
 
-    def remove_id(self, v, flow_preserving=True):
+    def remove_id(self, v, flow_preserving=True, parity_measurement_preserving=True):
         if self.G.degree(v) != 2:
             return False
 
@@ -125,23 +129,46 @@ class CoveredZXGraph:
         self.G.remove_node(v)
         self.G.add_edge(n1, n2)
 
-        if flow_preserving and not self._remove_id_check_flow(v):
+        flow_check = flow_preserving and not self._remove_id_check_flow(v)
+        parity_spider_check =  (parity_measurement_preserving and
+                                (self.node_types[n1] == self.node_types[n2] != self.node_types[v]) and
+                                (self.G.degree(n1) != 2 and self.G.degree(n2) != 2)
+                                )
+
+
+        if  flow_check or parity_spider_check:
             self.G.remove_edge(n1, n2)
             self.G.add_node(v)
             self.G.add_edge(n1, v)
             self.G.add_edge(n2, v)
             return False
 
+        path_id = next(pid for pid, path in self.paths.items() if v in path)
+        in_path_ix = self.paths[path_id].index(v)
+        next_node_in_path = self.paths[path_id][in_path_ix + 1] if in_path_ix < (len(self.paths[path_id]) - 1)  else None
+        previous_node_in_path = self.paths[path_id][in_path_ix - 1] if in_path_ix > 0  else None
+
+        removal_record = {
+            'id': v,
+            'node_type': self.node_types[v],
+            'pos': self.pos[v],
+            'path_id': path_id,
+            'next_node_in_path': next_node_in_path,
+            'previous_node_in_path': previous_node_in_path,
+        }
+        edge_key = self._sorted_pair(n1, n2)
+        self.removed_spiders[edge_key] = removal_record
+
         self._purge_vertex_information(v)
         return True
 
-    def basic_FE_rewrites(self):
+    def basic_FE_rewrites(self, max_cut=1000):
         for v in list(self.G.nodes()):
             if self.G.degree(v) == 1 and self.node_types[v] != zx.VertexType.BOUNDARY:
                 [n] = self.G.neighbors(v)
                 self.fuse(v, n)
 
-        for v in list(self.G.nodes()):
+        for v, _ in zip(list(self.G.nodes()), range(max_cut)):
             self.remove_id(v)
 
     def visualize(self, figsize=(15, 12)):
@@ -191,7 +218,7 @@ class CoveredZXGraph:
             new_paths_candidate = None
             min_pcheck = self._num_parity_measurement(current_paths)
 
-            for new_paths_candidate in self.all_causal_boundary_bends(current_paths):
+            for new_paths_candidate, bend_indices in self.all_causal_boundary_bends(current_paths):
                 num_pcheck = self._num_parity_measurement(new_paths_candidate)
 
                 if num_pcheck < min_pcheck:
@@ -209,12 +236,10 @@ class CoveredZXGraph:
         current_paths = paths or self.paths
 
         for bend_indices in self._boundary_bends(current_paths):
-            for bend in self._causal_path_bends(current_paths, *bend_indices):
-                yield bend
+            for bend, reversed_path_index in self._causal_path_bends(current_paths, *bend_indices):
+                yield bend, reversed_path_index
 
     def insert_empty_spiders(self):
-        next_free_id = max(self.G.nodes()) + 1
-
         all_path_edges = []
         firsts, lasts = {}, {}
         for q, p in self.paths.items():
@@ -223,28 +248,57 @@ class CoveredZXGraph:
             lasts[p[-1]] = q
 
         for u, v in list(self.G.edges()):
+            pair = self._sorted_pair(u, v)
             is_parity = (self.node_types[u] == self.node_types[v]
-                         and self._sorted_pair(u, v) not in all_path_edges)
+                         and pair not in all_path_edges)
 
             if is_parity:
-                self.G.remove_edge(u, v)
-                self.G.add_node(next_free_id)
-                self.G.add_edge(u, next_free_id)
-                self.G.add_edge(next_free_id, v)
+                record = self.removed_spiders[pair]
+                self.restore_spider_in_graph(record, u, v)
+                self.restore_spider_in_path(record)
 
-                self.node_types[next_free_id] = (
-                    zx.VertexType.Z
-                    if self.node_types[u] == zx.VertexType.X
-                    else zx.VertexType.X
-                )
+    def restore_spider_in_path(self, record):
+        spider_id = record['id']
+        next_node = record['next_node_in_path']
+        prev_node = record['previous_node_in_path']
+        path_id = next(
+            (k for k, p in self.paths.items() if next_node in p or prev_node in p),
+            None
+        )
+        if path_id is None:
+            path_id = record['path_id']
+            self.paths[path_id].append(spider_id)
+            return
 
-                x_u, y_u = self.pos[u]
-                x_v, y_v = self.pos[v]
-                self.pos[next_free_id] = ((x_u + x_v) / 2, (y_u + y_v) / 2)
+        path = self.paths[path_id]
+        if next_node in path:
+            i = path.index(next_node)
+            if self.path_reversed[record['path_id']]:
+                path.insert(i + 1, spider_id)
+            else:
+                path.insert(i, spider_id)
+            pass
+        elif prev_node in path:
+            i = path.index(prev_node)
+            if i == (len(path) - 1):
+                self._measurements[spider_id] = self._measurements[path[i]]
+                del self._measurements[path[i]]
+            if self.path_reversed[record['path_id']]:
+                path.insert(i, spider_id)
+            else:
+                path.insert(i + 1, spider_id)
+            pass
 
-                self._insert_paths_single_empty_spider(u, v, firsts, lasts, next_free_id)
+    def restore_spider_in_graph(self, record, u, v):
+        spider_id = record['id']
+        self.G.remove_edge(u, v)
+        self.G.add_node(spider_id)
+        self.G.add_edge(u, spider_id)
+        self.G.add_edge(spider_id, v)
 
-                next_free_id += 1
+        # 2. Restore Attributes
+        self.node_types[spider_id] = record['node_type']
+        self.pos[spider_id] = record['pos']
 
     def _try_insert_firsts(self, u, firsts, next_free_id):
         if u in firsts:
@@ -379,14 +433,14 @@ class CoveredZXGraph:
         new_paths_1[j] = merged_path
 
         if self.check_causal_flow(new_paths_1):
-            yield new_paths_1
+            yield new_paths_1, i
 
         new_paths_2 = copy.deepcopy(paths)
         del new_paths_2[j]
         new_paths_2[i] = list(reversed(merged_path))
 
         if self.check_causal_flow(new_paths_2):
-            yield new_paths_2
+            yield new_paths_2, j
 
     def _get_path_to_qubit(self):
         qubits = list(self.paths.keys())
@@ -497,6 +551,11 @@ def code_15_7_3():
     return build_zx_circuit(15, 17, h1, h2, cnots_list)
 
 
+def code_nonFT_15_7_3():
+    h1, cnots_list, h2 = code_nonFT_15_7_3_gates()
+    return build_zx_circuit(15, 16, h1, h2, cnots_list)
+
+
 def code_8_3_2():
     h1, cnots_list, h2 = code_8_3_2_gates()
     return build_zx_circuit(8, 8, h1, h2, cnots_list)
@@ -517,10 +576,11 @@ def all_good_FT_opts(
     while len(covered_graphs) > 0:
         current_graph = covered_graphs.pop(0)
 
-        for path in current_graph.all_causal_boundary_bends():
+        for path, reversed_path_index in current_graph.all_causal_boundary_bends():
             cov_graph = current_graph.copy()
             cov_graph.paths = copy.deepcopy(path)
-            cov_graph.insert_empty_spiders()
+            cov_graph.path_reversed[reversed_path_index] ^= True
+            # cov_graph.insert_empty_spiders()
             circ = cov_graph.extract_circuit()
             good = verify_extraction_circuit(
                 circ,
@@ -529,32 +589,49 @@ def all_good_FT_opts(
                 decoder_table,
                 cov_graph.flag_qubit_indices(),
                 basis,
-                d
+                d,
+                verbose=True,
             )
             p_hash = cov_graph.path_hash()
-            if good and p_hash not in seen:
+            if not good:
+                print("BAD")
+            if p_hash not in seen:
                 covered_graphs.append(cov_graph)
                 seen.add(p_hash)
+                cov_graph.visualize()
                 yield cov_graph
+            else:
+                print("PRUNED")
 
 
 if __name__ == '__main__':
-    from codes import H_z_15_7_3, L_x_15_7_3
+    from codes import *
 
-    diagram = steane_code().to_graph()
+    diagram = code_nonFT_15_7_3().to_graph()
     cov_graph = CoveredZXGraph.from_zx_diagram(diagram)
+    initial_size = len(cov_graph.paths)
+
+    cov_graph.visualize()
     cov_graph.basic_FE_rewrites()
-    seen = set()
+    cov_graph.visualize()
+
+    # cov_graph.insert_empty_spiders()
+    # cov_graph.visualize()
+    # print(cov_graph.paths)
 
     for cv in all_good_FT_opts(
             cov_graph,
-            steane_code_stabs(),
-            np.array([0,0,0,0,1,1,1]),
-            "X", 3):
-        print(len(cv.paths))
-        if len(cv.paths) == 11:
-            cv.visualize()
-            print(cv.matrix_transformation_indices())
-            print(cv.measurement_qubit_indices())
-            print(cv.flag_qubit_indices())
+            H_z_15_7_3,
+            L_x_15_7_3,
+            "X", 1):
+        print("Number of ancilla qubits:", len(cv.paths) - len(H_z_15_7_3[0]))
+        print(
+            f"H indices: {cv.matrix_transformation_indices()}; "
+            f"Measurement indices: {cv.measurement_qubit_indices()}; "
+            f"Flag qubits: {cv.flag_qubit_indices()}"
+        )
+        # print(cv.matrix_transformation_indices())
+        # print(cv.measurement_qubit_indices())
+        # print(cv.flag_qubit_indices())
+        # print(cv.extract_circuit())
 

@@ -32,6 +32,13 @@ def code_15_7_3():
     h1, cnots_list, h2 = code_15_7_3_gates()
     return build_stim_circuit(15, 17, h1, h2, cnots_list)
 
+def code_15_7_3_SP():
+    h1, cnots_list, h2 = code_15_7_3_gates()
+    h1 = [h - 15 for h in h1]
+    h2 = [h - 15 for h in h2]
+    cnots_list = [(c - 15, n - 15) for c, n in cnots_list if c > 14 and n > 14]
+    return build_stim_circuit(0, 17, h1, h2, cnots_list)
+
 
 def code_8_3_2():
     h1, cnots_list, h2 = code_8_3_2_gates()
@@ -114,8 +121,7 @@ def verify_extraction_circuit(
 
         # E. Decode
         if actual_syndrome not in correction_table:
-            print(f"FAIL: Syndrome {actual_syndrome} unknown (Hook error spread too far?)")
-            # return False
+            return False
             continue
 
         correction = correction_table[actual_syndrome]
