@@ -5,11 +5,16 @@ from typing import Iterator
 
 import matplotlib.pyplot as plt
 import networkx as nx
+import numpy as np
 import pyzx as zx
 import stim
 
-from code_examples import *
+from qecc import QECCGadgets
 from verify_fault_tolerance import list_to_str_stabs, build_css_syndrome_table, verify_extraction_circuit
+
+
+def _sorted_pair(v1, v2):
+    return (v1, v2) if v1 < v2 else (v2, v1)
 
 
 class CoveredZXGraph:
@@ -32,12 +37,6 @@ class CoveredZXGraph:
         self._num_qubits = len([n for n in node_types.values() if n == zx.VertexType.BOUNDARY]) // 2
         self._measurements = {p[-1]: k - self._num_qubits for k, p in paths.items() if
                               node_types[p[-1]] != zx.VertexType.BOUNDARY}
-        self.removed_spiders = dict()
-
-    def path_hash(self) -> int:
-        return hash(
-            tuple(sorted(tuple((v)) for v in self.paths.values()))
-        )
 
     @classmethod
     def from_zx_diagram(cls, diagram: zx.Graph):
@@ -77,9 +76,29 @@ class CoveredZXGraph:
         )
         cg._num_qubits = self._num_qubits
         cg._measurements = self._measurements.copy()
-        cg.removed_spiders = copy.deepcopy(self.removed_spiders)
         cg.path_reversed = copy.deepcopy(self.path_reversed)
         return cg
+
+    def visualize(self, figsize=(15, 12)):
+        world_line_edges = []
+        for p in self.paths.values():
+            world_line_edges += list(zip(p, p[1:]))
+
+        node_colors = [self.TYPE_COLORS[self.node_types[n]] for n in self.G.nodes()]
+
+        plt.figure(figsize=figsize)
+        nx.draw_networkx_nodes(self.G, self.pos, node_color=node_colors, node_size=150, edgecolors='black')
+        nx.draw_networkx_edges(self.G, self.pos, edgelist=self.G.edges(),
+                               edge_color='gray', alpha=0.8)
+        nx.draw_networkx_edges(self.G, self.pos, edgelist=world_line_edges,
+                               edge_color='#336699', width=2, arrows=True, arrowstyle='->')
+        nx.draw_networkx_labels(self.G, self.pos, font_color='white', font_size=8)
+        plt.show()
+
+    def path_hash(self) -> int:
+        return hash(
+            tuple(sorted(tuple(v) for v in self.paths.values()))
+        )
 
     def _purge_vertex_information(self, v):
         del self.pos[v]
@@ -130,62 +149,29 @@ class CoveredZXGraph:
         self.G.add_edge(n1, n2)
 
         flow_check = flow_preserving and not self._remove_id_check_flow(v)
-        parity_spider_check =  (parity_measurement_preserving and
-                                (self.node_types[n1] == self.node_types[n2] != self.node_types[v]) and
-                                (self.G.degree(n1) != 2 and self.G.degree(n2) != 2)
-                                )
+        parity_spider_check = (parity_measurement_preserving and
+                               (self.node_types[n1] == self.node_types[n2] != self.node_types[v]) and
+                               (self.G.degree(n1) != 2 and self.G.degree(n2) != 2)
+                               )
 
-
-        if  flow_check or parity_spider_check:
+        if flow_check or parity_spider_check:
             self.G.remove_edge(n1, n2)
             self.G.add_node(v)
             self.G.add_edge(n1, v)
             self.G.add_edge(n2, v)
             return False
 
-        path_id = next(pid for pid, path in self.paths.items() if v in path)
-        in_path_ix = self.paths[path_id].index(v)
-        next_node_in_path = self.paths[path_id][in_path_ix + 1] if in_path_ix < (len(self.paths[path_id]) - 1)  else None
-        previous_node_in_path = self.paths[path_id][in_path_ix - 1] if in_path_ix > 0  else None
-
-        removal_record = {
-            'id': v,
-            'node_type': self.node_types[v],
-            'pos': self.pos[v],
-            'path_id': path_id,
-            'next_node_in_path': next_node_in_path,
-            'previous_node_in_path': previous_node_in_path,
-        }
-        edge_key = self._sorted_pair(n1, n2)
-        self.removed_spiders[edge_key] = removal_record
-
         self._purge_vertex_information(v)
         return True
 
-    def basic_FE_rewrites(self, max_cut=1000):
+    def basic_FE_rewrites(self):
         for v in list(self.G.nodes()):
             if self.G.degree(v) == 1 and self.node_types[v] != zx.VertexType.BOUNDARY:
                 [n] = self.G.neighbors(v)
                 self.fuse(v, n)
 
-        for v, _ in zip(list(self.G.nodes()), range(max_cut)):
+        for v, _ in self.G.nodes():
             self.remove_id(v)
-
-    def visualize(self, figsize=(15, 12)):
-        world_line_edges = []
-        for p in self.paths.values():
-            world_line_edges += list(zip(p, p[1:]))
-
-        node_colors = [self.TYPE_COLORS[self.node_types[n]] for n in self.G.nodes()]
-
-        plt.figure(figsize=figsize)
-        nx.draw_networkx_nodes(self.G, self.pos, node_color=node_colors, node_size=150, edgecolors='black')
-        nx.draw_networkx_edges(self.G, self.pos, edgelist=self.G.edges(),
-                               edge_color='gray', alpha=0.8)
-        nx.draw_networkx_edges(self.G, self.pos, edgelist=world_line_edges,
-                               edge_color='#336699', width=2, arrows=True, arrowstyle='->')
-        nx.draw_networkx_labels(self.G, self.pos, font_color='white', font_size=8)
-        plt.show()
 
     def _construct_flow_graph(self, paths_dict) -> nx.DiGraph:
         constraint_graph = nx.DiGraph()
@@ -206,6 +192,67 @@ class CoveredZXGraph:
         paths_to_check = paths if paths is not None else self.paths
         constraint_graph = self._construct_flow_graph(paths_to_check)
         return nx.is_directed_acyclic_graph(constraint_graph)
+
+    def _boundary_bends(self, paths):
+        vertex_qubit = {}
+        for k, path in paths.items():
+            for v in path:
+                vertex_qubit[v] = k
+
+        for v, w in self.G.edges():
+            # Check if start of one path connects to start of another
+            v_is_first_or_last = v in (paths[vertex_qubit[v]][0], paths[vertex_qubit[v]][-1])
+            w_is_first_or_last = w in (paths[vertex_qubit[w]][0], paths[vertex_qubit[w]][-1])
+
+            if v_is_first_or_last and w_is_first_or_last:
+                yield vertex_qubit[v], vertex_qubit[w]
+
+    def all_causal_boundary_bends(self, paths=None) -> Iterator:
+        """
+        Returns all new paths candidates that are causal
+        """
+        current_paths = paths or self.paths
+
+        for bend_indices in self._boundary_bends(current_paths):
+            for bend, reversed_path_index in self._causal_path_bends(current_paths, *bend_indices):
+                yield bend, reversed_path_index
+
+    def realign_pos(self) -> None:
+        ys = [self.pos[path[0]][1] for path in self.paths.values()]
+        ys.sort()
+
+        for path in self.paths.values():
+            xs = [self.pos[n][0] for n in path]
+            xs.sort()
+            # Spread out x coordinates if duplicates exist
+            for i in range(len(xs) - 1):
+                if xs[i] == xs[i + 1]:
+                    xs[i + 1] += 1
+            for i in range(len(xs) - 1):
+                if xs[i] == xs[i + 1]:
+                    xs[i + 1] += 1
+
+            y = min([self.pos[n][1] for n in path])
+
+            for p, x in zip(path, xs):
+                self.pos[p] = (x, y)
+
+    def _get_uncovered_edges(self, paths):
+        all_edges = set(_sorted_pair(u, v) for u, v in self.G.edges())
+        path_edges = []
+        for path in paths.values():
+            path_edges += list(zip(path[1:], path[:-1]))
+        path_edges_set = set(_sorted_pair(u, v) for u, v in path_edges)
+        return all_edges.difference(path_edges_set)
+
+    def _num_parity_measurement(self, paths):
+        count = 0
+        uncovered = self._get_uncovered_edges(paths)
+        for e in uncovered:
+            v, w = _sorted_pair(*e)
+            if self.node_types[v] == self.node_types[w]:
+                count += 1
+        return count
 
     def greedy_path_opt(self):
         """
@@ -228,202 +275,6 @@ class CoveredZXGraph:
                 current_paths = new_paths_candidate
 
         self.paths = current_paths
-
-    def all_causal_boundary_bends(self, paths=None):
-        """
-        Returns all new paths candidates that are causal
-        """
-        current_paths = paths or self.paths
-
-        for bend_indices in self._boundary_bends(current_paths):
-            for bend, reversed_path_index in self._causal_path_bends(current_paths, *bend_indices):
-                yield bend, reversed_path_index
-
-    def insert_empty_spiders(self):
-        all_path_edges = []
-        firsts, lasts = {}, {}
-        for q, p in self.paths.items():
-            all_path_edges += [self._sorted_pair(v1, v2) for v1, v2 in zip(p, p[1:])]
-            firsts[p[0]] = q
-            lasts[p[-1]] = q
-
-        for u, v in list(self.G.edges()):
-            pair = self._sorted_pair(u, v)
-            is_parity = (self.node_types[u] == self.node_types[v]
-                         and pair not in all_path_edges)
-
-            if is_parity:
-                record = self.removed_spiders[pair]
-                self.restore_spider_in_graph(record, u, v)
-                self.restore_spider_in_path(record)
-
-    def restore_spider_in_path(self, record):
-        spider_id = record['id']
-        next_node = record['next_node_in_path']
-        prev_node = record['previous_node_in_path']
-        path_id = next(
-            (k for k, p in self.paths.items() if next_node in p or prev_node in p),
-            None
-        )
-        if path_id is None:
-            path_id = record['path_id']
-            self.paths[path_id].append(spider_id)
-            return
-
-        path = self.paths[path_id]
-        if next_node in path:
-            i = path.index(next_node)
-            if self.path_reversed[record['path_id']]:
-                path.insert(i + 1, spider_id)
-            else:
-                path.insert(i, spider_id)
-            pass
-        elif prev_node in path:
-            i = path.index(prev_node)
-            if i == (len(path) - 1):
-                self._measurements[spider_id] = self._measurements[path[i]]
-                del self._measurements[path[i]]
-            if self.path_reversed[record['path_id']]:
-                path.insert(i, spider_id)
-            else:
-                path.insert(i + 1, spider_id)
-            pass
-
-    def restore_spider_in_graph(self, record, u, v):
-        spider_id = record['id']
-        self.G.remove_edge(u, v)
-        self.G.add_node(spider_id)
-        self.G.add_edge(u, spider_id)
-        self.G.add_edge(spider_id, v)
-
-        # 2. Restore Attributes
-        self.node_types[spider_id] = record['node_type']
-        self.pos[spider_id] = record['pos']
-
-    def _try_insert_firsts(self, u, firsts, next_free_id):
-        if u in firsts:
-            self.paths[firsts[u]].insert(0, next_free_id)
-            if not self.check_causal_flow():
-                self.paths[firsts[u]].pop(0)
-                return False
-            del firsts[u]
-            return True
-        return False
-
-    def _try_insert_lasts(self, u, lasts, next_free_id):
-        if u in lasts:
-            self.paths[lasts[u]].append(next_free_id)
-            if not self.check_causal_flow():
-                self.paths[lasts[u]].pop(-1)
-                return False
-            else:
-                self._measurements[next_free_id] = self._measurements[u]
-                del self._measurements[u]
-                del lasts[u]
-                return True
-        return False
-
-    def _insert_paths_single_empty_spider(self, u, v, firsts: dict, lasts: dict, next_free_id: int):
-        if self._try_insert_firsts(u, firsts, next_free_id):
-            return
-        if self._try_insert_firsts(v, firsts, next_free_id):
-            return
-        if self._try_insert_lasts(u, lasts, next_free_id):
-            return
-        if self._try_insert_lasts(v, lasts, next_free_id):
-            return
-
-        new_path_key = max(self.paths.keys()) + 1
-        self.paths[new_path_key] = [next_free_id]
-        raise ValueError('New path')
-
-    def extract_circuit(self) -> stim.Circuit:
-        if not self.check_causal_flow():
-            raise ValueError("Circuit must have causal flow.")
-
-        ops = self._find_total_ordering()
-        measurements = []
-        circ = stim.Circuit()
-        for txt, qbts in ops:
-            if txt in ("M", "MZ", "MR"):
-                measurements.append((txt, qbts))
-            else:
-                circ.append(txt, qbts)
-        measurements.sort(key=lambda x: x[1])
-        for txt, qbts in measurements:
-            circ.append(txt, qbts)
-
-        return circ
-
-    def matrix_transformation_indices(self) -> list:
-        lasts = [p[-1] for p in self.paths.values() if self.node_types[p[-1]] != zx.VertexType.BOUNDARY]
-        return [self._measurements[v] for v in lasts if self._measurements[v] < self._num_qubits]
-
-    def measurement_qubit_indices(self) -> list:
-        lasts = {i: p[-1] for i, p in self.paths.items() if self.node_types[p[-1]] != zx.VertexType.BOUNDARY}
-        path_to_qubit = self._get_path_to_qubit()
-        return [path_to_qubit[i] - self._num_qubits for i, v in lasts.items() if self._measurements[v] < self._num_qubits]
-
-    def flag_qubit_indices(self) -> list:
-        lasts = {i: p[-1] for i, p in self.paths.items() if self.node_types[p[-1]] != zx.VertexType.BOUNDARY}
-        path_to_qubit = self._get_path_to_qubit()
-        return [path_to_qubit[i] - self._num_qubits for i, v in lasts.items() if self._measurements[v] >= self._num_qubits]
-
-
-    def realign_pos(self) -> None:
-        ys = [self.pos[path[0]][1] for path in self.paths.values()]
-        ys.sort()
-
-        for path in self.paths.values():
-            xs = [self.pos[n][0] for n in path]
-            xs.sort()
-            # Spread out x coords if duplicates exist
-            for i in range(len(xs) - 1):
-                if xs[i] == xs[i + 1]:
-                    xs[i + 1] += 1
-            for i in range(len(xs) - 1):
-                if xs[i] == xs[i + 1]:
-                    xs[i + 1] += 1
-
-            y = min([self.pos[n][1] for n in path])
-
-            for p, x in zip(path, xs):
-                self.pos[p] = (x, y)
-
-    @staticmethod
-    def _sorted_pair(v1, v2):
-        return (v1, v2) if v1 < v2 else (v2, v1)
-
-    def _get_uncovered_edges(self, paths):
-        all_edges = set(self._sorted_pair(u, v) for u, v in self.G.edges())
-        path_edges = []
-        for path in paths.values():
-            path_edges += list(zip(path[1:], path[:-1]))
-        path_edges_set = set(self._sorted_pair(u, v) for u, v in path_edges)
-        return all_edges.difference(path_edges_set)
-
-    def _num_parity_measurement(self, paths):
-        count = 0
-        uncovered = self._get_uncovered_edges(paths)
-        for e in uncovered:
-            v, w = self._sorted_pair(*e)
-            if self.node_types[v] == self.node_types[w]:
-                count += 1
-        return count
-
-    def _boundary_bends(self, paths):
-        vertex_qubit = {}
-        for k, path in paths.items():
-            for v in path:
-                vertex_qubit[v] = k
-
-        for v, w in self.G.edges():
-            # Check if start of one path connects to start of another
-            v_is_first_or_last = v in (paths[vertex_qubit[v]][0], paths[vertex_qubit[v]][-1])
-            w_is_first_or_last = w in (paths[vertex_qubit[w]][0], paths[vertex_qubit[w]][-1])
-
-            if v_is_first_or_last and w_is_first_or_last:
-                yield vertex_qubit[v], vertex_qubit[w]
 
     def _causal_path_bends(self, paths, i, j):
         merged_path = list(reversed(paths[i])) + paths[j]
@@ -462,7 +313,7 @@ class CoveredZXGraph:
                 ordered_operations.append(("H", qubit_to_qubit[q]))
             lasts.add(p[-1])
 
-        path_edges_list = [[self._sorted_pair(v1, v2) for v1, v2 in zip(p, p[1:])]
+        path_edges_list = [[_sorted_pair(v1, v2) for v1, v2 in zip(p, p[1:])]
                            for p in self.paths.values()]
         all_path_edges = list(itertools.chain(*path_edges_list))
 
@@ -477,7 +328,7 @@ class CoveredZXGraph:
         processed_edges = set()
 
         # Topological sort processing
-        while len(constraint_graph.nodes()) > 0:
+        while len(list(constraint_graph.nodes())) > 0:
             # Find nodes with in-degree 0
             sources = [n for n, d in constraint_graph.in_degree() if d == 0]
 
@@ -497,7 +348,7 @@ class CoveredZXGraph:
                     if self.node_types[n] == zx.VertexType.BOUNDARY:
                         continue
 
-                    edge = self._sorted_pair(s, n)
+                    edge = _sorted_pair(s, n)
                     if edge in all_path_edges or edge in processed_edges:
                         continue
 
@@ -519,46 +370,40 @@ class CoveredZXGraph:
 
         return ordered_operations
 
+    def extract_circuit(self) -> stim.Circuit:
+        if not self.check_causal_flow():
+            raise ValueError("Circuit must have causal flow.")
 
-def build_zx_circuit(n_data: int, n_ancillae: int, h1, h2, cnots):
-    circ = zx.Circuit(n_data)
+        ops = self._find_total_ordering()
+        measurements = []
+        circ = stim.Circuit()
+        for txt, qubits in ops:
+            if txt in ("M", "MZ", "MR"):
+                measurements.append((txt, qubits))
+            else:
+                circ.append(txt, qubits)
+        measurements.sort(key=lambda x: x[1])
+        for txt, qubits in measurements:
+            circ.append(txt, qubits)
 
-    for i in range(n_data, n_data + n_ancillae):
-        if i in h1:
-            circ.add_gate("InitAncilla", label=i, basis="X")
-        else:
-            circ.add_gate("InitAncilla", label=i, basis="Z")
+        return circ
 
-    for c, n in cnots:
-        circ.add_gate("CNOT", c, n)
+    def matrix_transformation_indices(self) -> list:
+        lasts = [p[-1] for p in self.paths.values() if self.node_types[p[-1]] != zx.VertexType.BOUNDARY]
+        return [self._measurements[v] for v in lasts if self._measurements[v] < self._num_qubits]
 
-    for i in range(n_data, n_data + n_ancillae):
-        if i in h2:
-            circ.add_gate("PostSelect", label=i, basis="X")
-        else:
-            circ.add_gate("PostSelect", label=i, basis="Z")
+    def measurement_qubit_indices(self) -> list:
+        lasts = {i: p[-1] for i, p in self.paths.items() if self.node_types[p[-1]] != zx.VertexType.BOUNDARY}
+        path_to_qubit = self._get_path_to_qubit()
+        return [path_to_qubit[i] - self._num_qubits for i, v in lasts.items() if
+                self._measurements[v] < self._num_qubits]
 
-    return circ
+    def flag_qubit_indices(self) -> list:
+        lasts = {i: p[-1] for i, p in self.paths.items() if self.node_types[p[-1]] != zx.VertexType.BOUNDARY}
+        path_to_qubit = self._get_path_to_qubit()
+        return [path_to_qubit[i] - self._num_qubits for i, v in lasts.items() if
+                self._measurements[v] >= self._num_qubits]
 
-
-def steane_code():
-    h1, cnots_list, h2 = steane_code_gates()
-    return build_zx_circuit(7, 8, h1, h2, cnots_list)
-
-
-def code_15_7_3():
-    h1, cnots_list, h2 = code_15_7_3_gates()
-    return build_zx_circuit(15, 17, h1, h2, cnots_list)
-
-
-def code_nonFT_15_7_3():
-    h1, cnots_list, h2 = code_nonFT_15_7_3_gates()
-    return build_zx_circuit(15, 16, h1, h2, cnots_list)
-
-
-def code_8_3_2():
-    h1, cnots_list, h2 = code_8_3_2_gates()
-    return build_zx_circuit(8, 8, h1, h2, cnots_list)
 
 def all_good_FT_opts(
         covered_zx_graph: CoveredZXGraph,
@@ -605,11 +450,12 @@ def all_good_FT_opts(
 
 
 if __name__ == '__main__':
-    from codes import *
 
-    diagram = code_nonFT_15_7_3().to_graph()
+    gadgets = QECCGadgets.from_json("circuits/15_7_3.json")
+    diagram = gadgets.steane_z_syndrome_extraction.to_pyzx()
     cov_graph = CoveredZXGraph.from_zx_diagram(diagram)
     initial_size = len(cov_graph.paths)
+    print(cov_graph.extract_circuit())
 
     cov_graph.visualize()
     cov_graph.basic_FE_rewrites()
@@ -617,14 +463,13 @@ if __name__ == '__main__':
 
     # cov_graph.insert_empty_spiders()
     # cov_graph.visualize()
-    # print(cov_graph.paths)
 
     for cv in all_good_FT_opts(
             cov_graph,
-            H_z_15_7_3,
-            L_x_15_7_3,
-            "X", 1):
-        print("Number of ancilla qubits:", len(cv.paths) - len(H_z_15_7_3[0]))
+            gadgets.code.H_z,
+            gadgets.code.L_x,
+            "X", gadgets.code.d):
+        print("Number of ancilla qubits:", len(cv.paths) - gadgets.code.n)
         print(
             f"H indices: {cv.matrix_transformation_indices()}; "
             f"Measurement indices: {cv.measurement_qubit_indices()}; "
@@ -634,4 +479,3 @@ if __name__ == '__main__':
         # print(cv.measurement_qubit_indices())
         # print(cv.flag_qubit_indices())
         # print(cv.extract_circuit())
-

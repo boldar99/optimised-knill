@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 import numpy as np
+import pyzx as zx
 import stim
 
 
@@ -29,7 +30,7 @@ class NoiseModel:
 
     @classmethod
     def from_p(cls, p: float) -> NoiseModel:
-        return cls(p_1=p/100, p_2=p, p_init=p, p_meas=p, p_mem=p/10)
+        return cls(p_1=p / 100, p_2=p, p_init=p, p_meas=p, p_mem=p / 10)
 
     @classmethod
     def Quantinuum_H2(cls):
@@ -76,7 +77,7 @@ class Circuit(abc.ABC):
     bra_zero: list[int]
     bra_plus: list[int]
 
-    def to_stim(self, noise_model = None):
+    def to_stim(self, noise_model=None, *args, _layer_cnots=True):
         def _layer_cnot_circuit(cnots):
             num_qubits = max(map(max, cnots))
             all_qubits = range(num_qubits + 1)
@@ -85,8 +86,8 @@ class Circuit(abc.ABC):
             for c, n in cnots:
                 l = max(next_free_layer[c], next_free_layer[n])
                 layers[l].append((c, n))
-                next_free_layer[c] += 1
-                next_free_layer[n] += 1
+                next_free_layer[c] = l + 1
+                next_free_layer[n] = l + 1
             return list(layers.values())
 
         if noise_model is None:
@@ -100,9 +101,14 @@ class Circuit(abc.ABC):
             circ.append("H", i)
             if noise_model.p_1 > 0:
                 circ.append("DEPOLARIZE1", i, noise_model.p_1)
+        circ.append("TICK")
 
         all_qubits = set(range(max(map(max, self.cnots)) + 1))
-        cnot_layers = _layer_cnot_circuit(self.cnots)
+        if _layer_cnots:
+            cnot_layers = _layer_cnot_circuit(self.cnots)
+        else:
+            cnot_layers = [self.cnots]
+
         for cnot_layer in cnot_layers:
             for c, n in cnot_layer:
                 circ.append("CNOT", [c, n])
@@ -110,6 +116,7 @@ class Circuit(abc.ABC):
                     circ.append("DEPOLARIZE2", [c, n], noise_model.p_2)
             if noise_model.p_mem > 0:
                 circ.append("Z_ERROR", all_qubits, noise_model.p_mem)
+            circ.append("TICK")
 
         for i in self.bra_plus:
             circ.append("H", i)
@@ -122,6 +129,25 @@ class Circuit(abc.ABC):
                 circ.append("MR", i)
 
         return circ
+
+    def to_pyzx(self):
+        n_data = min(min(self.ket_zero), min(self.ket_zero))
+        circ = zx.Circuit(n_data)
+
+        for i in self.ket_zero:
+            circ.add_gate("InitAncilla", label=i, basis="Z")
+        for i in self.ket_plus:
+            circ.add_gate("InitAncilla", label=i, basis="X")
+
+        for c, n in self.cnots:
+            circ.add_gate("CNOT", c, n)
+
+        for i in self.bra_zero:
+            circ.add_gate("PostSelect", label=i, basis="Z")
+        for i in self.bra_plus:
+            circ.add_gate("PostSelect", label=i, basis="X")
+
+        return circ.to_graph()
 
 
 @dataclass
@@ -158,8 +184,8 @@ class StatePreparationCircuit(Circuit):
             bra_plus=self.bra_zero
         )
 
-    def to_stim(self, noise_model = None):
-        circ = super().to_stim(noise_model)
+    def to_stim(self, noise_model=NoiseModel(), *args, _layer_cnots=True):
+        circ = super().to_stim(noise_model, _layer_cnots=_layer_cnots)
         for i in range(len(self.bra_zero) + len(self.bra_plus)):
             circ.append("DETECTOR", stim.target_rec(-i - 1))
         return circ
@@ -207,8 +233,8 @@ class SyndromeMeasurementCircuit(Circuit):
             flags=x_flags + z_flags,
         )
 
-    def to_stim(self, noise_model = NoiseModel()):
-        circ = super().to_stim(noise_model)
+    def to_stim(self, noise_model=NoiseModel(), *args, _layer_cnots=True):
+        circ = super().to_stim(noise_model, _layer_cnots=_layer_cnots)
 
         num_measurements = len(self.bra_zero) + len(self.bra_plus)
         for i, q in enumerate(self.bra_zero + self.bra_plus):
@@ -218,7 +244,7 @@ class SyndromeMeasurementCircuit(Circuit):
 
 
 @dataclass
-class QECCImplementation:
+class QECCGadgets:
     code: QECC
     ft_z_state_prep: StatePreparationCircuit
     ft_x_state_prep: StatePreparationCircuit
@@ -262,8 +288,15 @@ class QECCImplementation:
     def steane_x_syndrome_extraction(self) -> SyndromeMeasurementCircuit:
         return SyndromeMeasurementCircuit.steane_style(self.ft_z_state_prep)
 
+    @property
+    def non_ft_steane_z_syndrome_extraction(self) -> SyndromeMeasurementCircuit:
+        return SyndromeMeasurementCircuit.steane_style(self.non_ft_x_state_prep)
+
+    @property
+    def non_ft_steane_x_syndrome_extraction(self) -> SyndromeMeasurementCircuit:
+        return SyndromeMeasurementCircuit.steane_style(self.non_ft_z_state_prep)
 
 
 if __name__ == '__main__':
-    impl = QECCImplementation.from_json("circuits/15_7_3.json")
-    print(impl.steane_z_syndrome_extraction.to_stim(NoiseModel(p_mem=.1)))
+    gadgets = QECCGadgets.from_json("circuits/15_7_3.json")
+    print(gadgets.steane_z_syndrome_extraction.to_stim(_layer_cnots=False))

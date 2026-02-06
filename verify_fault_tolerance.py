@@ -1,64 +1,7 @@
 import itertools
 
+import numpy as np
 import stim
-
-from code_examples import *
-from codes import *
-
-
-def build_stim_circuit(n_data: int, n_ancillae: int, h1, h2, cnots):
-    circ = stim.Circuit()
-
-    for i in h1:
-        circ.append("H", i)
-
-    for c, n in cnots:
-        circ.append("CNOT", [c, n])
-
-    for i in range(n_data, n_data + n_ancillae):
-        if i in h2:
-            circ.append("H", i)
-        # circ.append("M", i)
-
-    return circ
-
-
-def steane_code():
-    h1, cnots_list, h2 = steane_code_gates()
-    return build_stim_circuit(7, 8, h1, h2, cnots_list)
-
-
-
-def code_steane_SP():
-    h1, cnots_list, h2 = steane_code_gates()
-    h1 = [h - 7 for h in h1]
-    h2 = [h - 7 for h in h2]
-    cnots_list = [(c - 7, n - 7) for c, n in cnots_list if c > 6 and n > 6]
-    return build_stim_circuit(0, 8, h1, h2, cnots_list)
-
-
-def code_15_7_3():
-    h1, cnots_list, h2 = code_15_7_3_gates()
-    return build_stim_circuit(15, 17, h1, h2, cnots_list)
-
-def code_15_7_3_SP():
-    h1, cnots_list, h2 = code_15_7_3_gates()
-    h1 = [h - 15 for h in h1]
-    h2 = [h - 15 for h in h2]
-    cnots_list = [(c - 15, n - 15) for c, n in cnots_list if c > 14 and n > 14]
-    return build_stim_circuit(0, 17, h1, h2, cnots_list)
-
-
-def code_8_3_2():
-    h1, cnots_list, h2 = code_8_3_2_gates()
-    return build_stim_circuit(8, 8, h1, h2, cnots_list)
-
-def code_8_3_2_SP():
-    h1, cnots_list, h2 = code_8_3_2_gates()
-    h1 = [h - 8 for h in h1]
-    h2 = [h - 8 for h in h2]
-    cnots_list = [(c - 8, n - 8) for c, n in cnots_list if c > 7 and n > 7]
-    return build_stim_circuit(0, 8, h1, h2, cnots_list)
 
 
 def build_css_syndrome_table(stabilizers: list[str], d: int):
@@ -158,9 +101,6 @@ def verify_extraction_circuit(
             return False
 
     return True
-
-
-import stim
 
 
 def explode_circuit(circuit: stim.Circuit) -> list[stim.CircuitInstruction]:
