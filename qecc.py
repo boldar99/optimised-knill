@@ -131,7 +131,7 @@ class Circuit(abc.ABC):
         return circ
 
     def to_pyzx(self):
-        n_data = min(min(self.ket_zero), min(self.ket_zero))
+        n_data = min(min(self.ket_zero), min(self.bra_zero))
         circ = zx.Circuit(n_data)
 
         for i in self.ket_zero:

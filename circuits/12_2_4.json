@@ -17,6 +17,20 @@
     "bra_0": [],
     "bra_+": []
   },
+  "fault_tolerant_plus_state_prep": {
+    "ket_0":  [],
+    "ket_+": [],
+    "cnots": [],
+    "bra_0": [],
+    "bra_+": []
+  },
+  "non_fault_tolerant_plus_state_prep": {
+    "ket_0":  [],
+    "ket_+": [],
+    "cnots": [],
+    "bra_0": [],
+    "bra_+": []
+  },
   "H_x": [
   ],
   "L_x": [

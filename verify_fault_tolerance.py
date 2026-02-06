@@ -64,6 +64,9 @@ def verify_extraction_circuit(
     ops = explode_circuit(circuit)
     possible_faults = get_fault_locations(ops)
 
+    modified_correction_table = dict()
+    modified_correction_table_origin = dict()
+
     # Iterate combinations
     for fault_combo in itertools.combinations(possible_faults, t_faults):
         noisy_c = build_noisy_circuit(fault_combo, fault_type, init_str, ops)
@@ -90,7 +93,22 @@ def verify_extraction_circuit(
         logical_flip = (L_matrix @ final_state) % 2
 
         # Since we started with Logical 0 (or +), expected logical outcome is 0.
-        if np.any(logical_flip) and not np.any(flag_record):
+        if np.any(flag_record):
+            print(f"Syndrome: {actual_syndrome} + Flags: {flag_record} -> {logical_flip}")
+            full_syndrome = (actual_syndrome, tuple(flag_record.tolist()))
+            if full_syndrome in modified_correction_table and np.any(logical_flip == 1):
+                if np.any(modified_correction_table[full_syndrome] != logical_flip):
+                    print(f"NON UNIQUE CORRECTION for {full_syndrome} for ")
+                    print("Saved correction:", modified_correction_table[full_syndrome])
+                    print("New correction:", logical_flip)
+                    print("Fault Combos:", modified_correction_table_origin[full_syndrome], fault_type)
+            elif np.any(logical_flip == 1):
+                modified_correction_table[full_syndrome] = logical_flip
+                modified_correction_table_origin[full_syndrome] = fault_combo
+            else:
+                print("Skipping saving measurement")
+
+        elif np.any(logical_flip):
             if verbose:
                 print(f"LOGICAL FAILURE via Extraction Circuit!")
                 print(f"Faults: {fault_combo}")
