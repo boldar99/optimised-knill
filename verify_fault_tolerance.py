@@ -101,7 +101,7 @@ def verify_extraction_circuit(
                     print(f"NON UNIQUE CORRECTION for {full_syndrome} for ")
                     print("Saved correction:", modified_correction_table[full_syndrome])
                     print("New correction:", logical_flip)
-                    print("Fault Combos:", modified_correction_table_origin[full_syndrome], fault_type)
+                    print("Fault Combos:", modified_correction_table_origin[full_syndrome], fault_combo)
             elif np.any(logical_flip == 1):
                 modified_correction_table[full_syndrome] = logical_flip
                 modified_correction_table_origin[full_syndrome] = fault_combo

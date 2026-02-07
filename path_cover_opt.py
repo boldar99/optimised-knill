@@ -150,8 +150,8 @@ class CoveredZXGraph:
 
         flow_check = flow_preserving and not self._remove_id_check_flow(v)
         parity_spider_check = (parity_measurement_preserving and
-                               (self.node_types[n1] == self.node_types[n2] != self.node_types[v])
-                               # (self.G.degree(n1) != 2 and self.G.degree(n2) != 2)
+                               (self.node_types[n1] == self.node_types[n2] != self.node_types[v]) and
+                               (self.G.degree(n1) != 2 and self.G.degree(n2) != 2)
                                )
 
         if flow_check or parity_spider_check:
@@ -415,17 +415,6 @@ def all_good_FT_opts(
     stabs = list_to_str_stabs(H_matrix)
     decoder_table = build_css_syndrome_table(stabs, d)
 
-    good = verify_extraction_circuit(
-        covered_zx_graph.extract_circuit(),
-        H_matrix,
-        L_matrix,
-        decoder_table,
-        covered_zx_graph.flag_qubit_indices(),
-        basis,
-        d,
-        verbose=True,
-    )
-
     yield covered_zx_graph
     covered_graphs = [covered_zx_graph]
     seen = {covered_zx_graph.path_hash()}
@@ -454,7 +443,7 @@ def all_good_FT_opts(
             if p_hash not in seen:
                 covered_graphs.append(cov_graph)
                 seen.add(p_hash)
-                # cov_graph.visualize()
+                cov_graph.visualize()
                 yield cov_graph
             else:
                 print("PRUNED")
@@ -466,41 +455,36 @@ if __name__ == '__main__':
     diagram = gadgets.steane_z_syndrome_extraction.to_pyzx()
     cov_graph = CoveredZXGraph.from_zx_diagram(diagram)
     initial_size = len(cov_graph.paths)
-    print(cov_graph.extract_circuit())
-
     cov_graph.visualize()
 
-    stabs = list_to_str_stabs(gadgets.code.H_z)
-    decoder_table = build_css_syndrome_table(stabs, gadgets.code.d)
+    # stabs = list_to_str_stabs(gadgets.code.H_z)
+    # decoder_table = build_css_syndrome_table(stabs, gadgets.code.d)
+    # good = verify_extraction_circuit(
+    #     cov_graph.extract_circuit(),
+    #     gadgets.code.H_z,
+    #     gadgets.code.L_x,
+    #     decoder_table,
+    #     cov_graph.flag_qubit_indices(),
+    #     "X",
+    #     gadgets.code.d,
+    #     verbose=True,
+    # )
+    cov_graph.basic_FE_rewrites()
+    cov_graph.visualize()
 
-    good = verify_extraction_circuit(
-        cov_graph.extract_circuit(),
-        gadgets.code.H_z,
-        gadgets.code.L_x,
-        decoder_table,
-        cov_graph.flag_qubit_indices(),
-        "X",
-        gadgets.code.d,
-        verbose=True,
-    )
-    # cov_graph.basic_FE_rewrites()
-    # cov_graph.visualize()
-
-    # cov_graph.insert_empty_spiders()
-    # cov_graph.visualize()
-
-    # for cv in all_good_FT_opts(
-    #         cov_graph,
-    #         gadgets.code.H_z,
-    #         gadgets.code.L_x,
-    #         "X", gadgets.code.d):
-    #     print("Number of ancilla qubits:", len(cv.paths) - gadgets.code.n)
-    #     print(
-    #         f"H indices: {cv.matrix_transformation_indices()}; "
-    #         f"Measurement indices: {cv.measurement_qubit_indices()}; "
-    #         f"Flag qubits: {cv.flag_qubit_indices()}"
-    #     )
-    #     # print(cv.matrix_transformation_indices())
-    #     # print(cv.measurement_qubit_indices())
-    #     # print(cv.flag_qubit_indices())
-    #     print(cv.extract_circuit())
+    for cv in all_good_FT_opts(
+            cov_graph,
+            gadgets.code.H_z,
+            gadgets.code.L_x,
+            "X", gadgets.code.d):
+        print("Number of ancilla qubits:", len(cv.paths) - gadgets.code.n)
+        print(
+            f"H indices: {cv.matrix_transformation_indices()}; "
+            f"Measurement indices: {cv.measurement_qubit_indices()}; "
+            f"Flag qubits: {cv.flag_qubit_indices()}"
+        )
+        print(cv.matrix_transformation_indices())
+        print(cv.measurement_qubit_indices())
+        print(cv.flag_qubit_indices())
+        print(cv.extract_circuit())
+        print()
