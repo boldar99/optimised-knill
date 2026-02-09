@@ -1,5 +1,6 @@
 import copy
 import itertools
+import math
 from collections import defaultdict
 from typing import Iterator
 
@@ -33,7 +34,6 @@ class CoveredZXGraph:
         self.pos = pos
         self.node_types = node_types
         self.paths = paths
-        self.path_reversed = {p: False for p in paths}
         self._num_qubits = len([n for n in node_types.values() if n == zx.VertexType.BOUNDARY]) // 2
         self._measurements = {p[-1]: k - self._num_qubits for k, p in paths.items() if
                               node_types[p[-1]] != zx.VertexType.BOUNDARY}
@@ -76,7 +76,6 @@ class CoveredZXGraph:
         )
         cg._num_qubits = self._num_qubits
         cg._measurements = self._measurements.copy()
-        cg.path_reversed = copy.deepcopy(self.path_reversed)
         return cg
 
     def visualize(self, figsize=(15, 12)):
@@ -207,15 +206,44 @@ class CoveredZXGraph:
             if v_is_first_or_last and w_is_first_or_last:
                 yield vertex_qubit[v], vertex_qubit[w]
 
-    def all_causal_boundary_bends(self, paths=None) -> Iterator:
+    def all_causal_single_boundary_bends(self, paths=None) -> Iterator:
         """
         Returns all new paths candidates that are causal
         """
         current_paths = paths or self.paths
 
         for bend_indices in self._boundary_bends(current_paths):
-            for bend, reversed_path_index in self._causal_path_bends(current_paths, *bend_indices):
-                yield bend, reversed_path_index
+            for bend in self._causal_path_bends(current_paths, *bend_indices):
+                yield bend
+
+    def bfs_causal_boundary_bends(self) -> Iterator["CoveredZXGraph"]:
+        yield self
+        covered_graphs = [self]
+        seen = {self.path_hash()}
+
+        while len(covered_graphs) > 0:
+            current_graph = covered_graphs.pop(0)
+
+            for path in current_graph.all_causal_single_boundary_bends():
+                cov_graph = current_graph.copy()
+                cov_graph.paths = copy.deepcopy(path)
+                p_hash = cov_graph.path_hash()
+                if p_hash not in seen:
+                    covered_graphs.append(cov_graph)
+                    seen.add(p_hash)
+                    yield cov_graph
+
+    def min_ancilla_boundary_bends(self) -> list["CoveredZXGraph"]:
+        min_num_qubits = len(self.paths)
+        min_covered_graphs = []
+        for current_graph in self.bfs_causal_boundary_bends():
+            current_num_qubits = len(current_graph.paths)
+            if current_num_qubits < min_num_qubits:
+                min_num_qubits = current_num_qubits
+                min_covered_graphs = [current_graph]
+            elif current_num_qubits == min_num_qubits:
+                min_covered_graphs.append(current_graph)
+        return min_covered_graphs
 
     def realign_pos(self) -> None:
         ys = [self.pos[path[0]][1] for path in self.paths.values()]
@@ -265,7 +293,7 @@ class CoveredZXGraph:
             new_paths_candidate = None
             min_pcheck = self._num_parity_measurement(current_paths)
 
-            for new_paths_candidate, bend_indices in self.all_causal_boundary_bends(current_paths):
+            for new_paths_candidate in self.all_causal_single_boundary_bends(current_paths):
                 num_pcheck = self._num_parity_measurement(new_paths_candidate)
 
                 if num_pcheck < min_pcheck:
@@ -284,14 +312,14 @@ class CoveredZXGraph:
         new_paths_1[j] = merged_path
 
         if self.check_causal_flow(new_paths_1):
-            yield new_paths_1, i
+            yield new_paths_1
 
         new_paths_2 = copy.deepcopy(paths)
         del new_paths_2[j]
         new_paths_2[i] = list(reversed(merged_path))
 
         if self.check_causal_flow(new_paths_2):
-            yield new_paths_2, j
+            yield new_paths_2
 
     def _get_path_to_qubit(self):
         qubits = list(self.paths.keys())
@@ -421,10 +449,9 @@ def all_good_FT_opts(
     while len(covered_graphs) > 0:
         current_graph = covered_graphs.pop(0)
 
-        for path, reversed_path_index in current_graph.all_causal_boundary_bends():
+        for path in current_graph.all_causal_single_boundary_bends():
             cov_graph = current_graph.copy()
             cov_graph.paths = copy.deepcopy(path)
-            cov_graph.path_reversed[reversed_path_index] ^= True
             # cov_graph.insert_empty_spiders()
             circ = cov_graph.extract_circuit()
             good = verify_extraction_circuit(
@@ -450,33 +477,16 @@ def all_good_FT_opts(
 
 
 if __name__ == '__main__':
-
     gadgets = QECCGadgets.from_json("circuits/15_7_3.json")
-    diagram = gadgets.steane_z_syndrome_extraction.to_pyzx()
+    diagram = gadgets.non_ft_steane_z_syndrome_extraction.to_pyzx()
     cov_graph = CoveredZXGraph.from_zx_diagram(diagram)
     initial_size = len(cov_graph.paths)
     cov_graph.visualize()
-
-    # stabs = list_to_str_stabs(gadgets.code.H_z)
-    # decoder_table = build_css_syndrome_table(stabs, gadgets.code.d)
-    # good = verify_extraction_circuit(
-    #     cov_graph.extract_circuit(),
-    #     gadgets.code.H_z,
-    #     gadgets.code.L_x,
-    #     decoder_table,
-    #     cov_graph.flag_qubit_indices(),
-    #     "X",
-    #     gadgets.code.d,
-    #     verbose=True,
-    # )
     cov_graph.basic_FE_rewrites()
     cov_graph.visualize()
 
-    for cv in all_good_FT_opts(
-            cov_graph,
-            gadgets.code.H_z,
-            gadgets.code.L_x,
-            "X", gadgets.code.d):
+    for cv in cov_graph.min_ancilla_boundary_bends():
+        cv.visualize()
         print("Number of ancilla qubits:", len(cv.paths) - gadgets.code.n)
         print(
             f"H indices: {cv.matrix_transformation_indices()}; "
