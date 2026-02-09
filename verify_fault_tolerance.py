@@ -21,9 +21,9 @@ def build_css_syndrome_table(stabilizers: list[str], d: int):
                 error = stim.PauliString(num_qubits)
                 for q in qubit_indices:
                     error[q] = p_type
-                syndrome = tuple(not error.commutes(s) for s in stab_paulis)
+                syndrome = tuple(int(not error.commutes(s)) for s in stab_paulis)
                 if syndrome not in decoder_table:
-                    decoder_table[syndrome] = error.to_numpy()[1]
+                    decoder_table[syndrome] = error.to_numpy()[1].astype(int).tolist()
 
     return decoder_table
 
@@ -40,7 +40,7 @@ def list_to_str_stabs(stabs):
     return xs
 
 
-def verify_extraction_circuit(
+def compute_modified_lookup_table(
         circuit: stim.Circuit,
         H_matrix: np.ndarray,  # Binary Matrix (num_stabilizers x num_data_qubits)
         L_matrix: np.ndarray,  # Binary Matrix (num_logicals x num_data_qubits)
@@ -94,19 +94,22 @@ def verify_extraction_circuit(
 
         # Since we started with Logical 0 (or +), expected logical outcome is 0.
         if np.any(flag_record):
-            print(f"Syndrome: {actual_syndrome} + Flags: {flag_record} -> {logical_flip}")
+            if verbose:
+                print(f"Syndrome: {actual_syndrome} + Flags: {flag_record} -> {logical_flip}")
             full_syndrome = (actual_syndrome, tuple(flag_record.tolist()))
             if full_syndrome in modified_correction_table and np.any(logical_flip == 1):
                 if np.any(modified_correction_table[full_syndrome] != logical_flip):
-                    print(f"NON UNIQUE CORRECTION for {full_syndrome} for ")
-                    print("Saved correction:", modified_correction_table[full_syndrome])
-                    print("New correction:", logical_flip)
-                    print("Fault Combos:", modified_correction_table_origin[full_syndrome], fault_combo)
+                    if verbose:
+                        print(f"NON UNIQUE CORRECTION for {full_syndrome} for ")
+                        print("Saved correction:", modified_correction_table[full_syndrome])
+                        print("New correction:", logical_flip)
+                        print("Fault Combos:", modified_correction_table_origin[full_syndrome], fault_combo)
             elif np.any(logical_flip == 1):
                 modified_correction_table[full_syndrome] = logical_flip
                 modified_correction_table_origin[full_syndrome] = fault_combo
             else:
-                print("Skipping saving measurement")
+                if verbose:
+                    print("Skipping saving measurement")
 
         elif np.any(logical_flip):
             if verbose:
@@ -116,9 +119,9 @@ def verify_extraction_circuit(
                 print(f"Correction applied: {correction}")
                 print(f"Result: Logical Flip")
                 print(noisy_c)
-            return False
+            return None
 
-    return True
+    return modified_correction_table
 
 
 def explode_circuit(circuit: stim.Circuit) -> list[stim.CircuitInstruction]:
@@ -205,6 +208,6 @@ if __name__ == "__main__":
     M 10 9
         """)
 
-    verify_extraction_circuit(steane_circ, steane_code_stabs(), np.array([0,0,0,0,1,1,1]), decoder_table, [3], "X", 3)
+    compute_modified_lookup_table(steane_circ, steane_code_stabs(), np.array([0, 0, 0, 0, 1, 1, 1]), decoder_table, [3], "X", 3)
 
 # verify_t_fault_tolerance(steane_code(), list_to_str_stabs(steane_code_stabs()), t_faults=1)

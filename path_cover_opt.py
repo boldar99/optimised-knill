@@ -11,7 +11,7 @@ import pyzx as zx
 import stim
 
 from qecc import QECCGadgets
-from verify_fault_tolerance import list_to_str_stabs, build_css_syndrome_table, verify_extraction_circuit
+from verify_fault_tolerance import list_to_str_stabs, build_css_syndrome_table, compute_modified_lookup_table
 
 
 def _sorted_pair(v1, v2):
@@ -454,7 +454,7 @@ def all_good_FT_opts(
             cov_graph.paths = copy.deepcopy(path)
             # cov_graph.insert_empty_spiders()
             circ = cov_graph.extract_circuit()
-            good = verify_extraction_circuit(
+            good = compute_modified_lookup_table(
                 circ,
                 H_matrix,
                 L_matrix,

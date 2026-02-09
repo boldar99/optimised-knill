@@ -70,6 +70,19 @@ class QECC:
         return cls(n, k, d, H_x, H_z, L_x, L_z, is_self_dual=is_self_dual)
 
 
+def _layer_cnot_circuit(cnots):
+    num_qubits = max(map(max, cnots))
+    all_qubits = range(num_qubits + 1)
+    next_free_layer = {q: 0 for q in all_qubits}
+    layers = defaultdict(list)
+    for c, n in cnots:
+        l = max(next_free_layer[c], next_free_layer[n])
+        layers[l].append((c, n))
+        next_free_layer[c] = l + 1
+        next_free_layer[n] = l + 1
+    return list(layers.values())
+
+
 class Circuit(abc.ABC):
     ket_zero: list[int]
     ket_plus: list[int]
@@ -78,17 +91,6 @@ class Circuit(abc.ABC):
     bra_plus: list[int]
 
     def to_stim(self, noise_model=None, *args, _layer_cnots=True):
-        def _layer_cnot_circuit(cnots):
-            num_qubits = max(map(max, cnots))
-            all_qubits = range(num_qubits + 1)
-            next_free_layer = {q: 0 for q in all_qubits}
-            layers = defaultdict(list)
-            for c, n in cnots:
-                l = max(next_free_layer[c], next_free_layer[n])
-                layers[l].append((c, n))
-                next_free_layer[c] = l + 1
-                next_free_layer[n] = l + 1
-            return list(layers.values())
 
         if noise_model is None:
             noise_model = NoiseModel()
