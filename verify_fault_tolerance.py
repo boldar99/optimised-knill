@@ -83,10 +83,26 @@ def compute_modified_lookup_table(
 
         # E. Decode
         if actual_syndrome not in correction_table:
-            return False
+            return None
             continue
 
         correction = correction_table[actual_syndrome]
+
+        stabs = np.array(H_matrix.tolist() + L_matrix.tolist())
+        num_stabs = len(H_matrix)
+        min_correction = stabs[0]
+        min_correction_val = len(stabs[0])
+        for i in range(2 ** len(stabs)):
+            vec_i = list(map(int, ('0' * len(stabs) + format(i, "b"))[-len(stabs):]))
+            vec_h = vec_i[:num_stabs]
+            vec_l = vec_i[num_stabs:]
+            final_state = (vec_i @ stabs + data_bits) % 2
+            correction_val = final_state.sum().tolist()
+            if correction_val < min_correction_val:
+                min_correction = vec_i @ stabs % 2
+                min_correction_val = correction_val
+        min_correction = min_correction.tolist()
+
 
         # F. Logical Check
         final_state = (data_bits + correction) % 2
@@ -96,16 +112,17 @@ def compute_modified_lookup_table(
         if np.any(flag_record):
             if verbose:
                 print(f"Syndrome: {actual_syndrome} + Flags: {flag_record} -> {logical_flip}")
-            full_syndrome = (actual_syndrome, tuple(flag_record.tolist()))
+            full_syndrome = (tuple(flag_record.tolist()), actual_syndrome)
             if full_syndrome in modified_correction_table and np.any(logical_flip == 1):
-                if np.any(modified_correction_table[full_syndrome] != logical_flip):
+                if np.any(modified_correction_table[full_syndrome] != min_correction):
                     if verbose:
                         print(f"NON UNIQUE CORRECTION for {full_syndrome} for ")
                         print("Saved correction:", modified_correction_table[full_syndrome])
                         print("New correction:", logical_flip)
                         print("Fault Combos:", modified_correction_table_origin[full_syndrome], fault_combo)
+                        return None
             elif np.any(logical_flip == 1):
-                modified_correction_table[full_syndrome] = logical_flip
+                modified_correction_table[full_syndrome] = min_correction
                 modified_correction_table_origin[full_syndrome] = fault_combo
             else:
                 if verbose:

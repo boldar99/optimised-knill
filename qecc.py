@@ -53,7 +53,7 @@ class QECC:
     is_self_dual: bool = False
 
     @classmethod
-    def from_json_string(cls, data: dict):
+    def from_dict(cls, data: dict):
         DATA_TYPE = np.uint8
         n = data['n']
         k = data['k']
@@ -90,7 +90,7 @@ class Circuit(abc.ABC):
     bra_zero: list[int]
     bra_plus: list[int]
 
-    def to_stim(self, noise_model=None, *args, _layer_cnots=True):
+    def to_stim(self, noise_model: NoiseModel | None = None, *args, _layer_cnots=True):
 
         if noise_model is None:
             noise_model = NoiseModel()
@@ -151,6 +151,19 @@ class Circuit(abc.ABC):
 
         return circ.to_graph()
 
+    def to_dict(self) -> dict:
+        return {
+            "ket_0": self.ket_zero.copy(),
+            "ket_+": self.ket_plus.copy(),
+            "cnots": [[c, n] for c, n in self.cnots],
+            "bra_0": self.bra_zero.copy(),
+            "bra_+": self.bra_plus.copy(),
+        }
+
+    @property
+    def cnot_depth(self):
+        return len(_layer_cnot_circuit(self.cnots))
+
 
 @dataclass
 class StatePreparationCircuit(Circuit):
@@ -162,7 +175,7 @@ class StatePreparationCircuit(Circuit):
     bra_plus: list[int]
 
     @classmethod
-    def from_json_string(cls, data: dict, basis: Basis):
+    def from_dict(cls, data: dict, basis: Basis):
         return cls(
             basis=basis,
             ket_zero=data["ket_0"],
@@ -171,6 +184,11 @@ class StatePreparationCircuit(Circuit):
             bra_zero=data["bra_0"],
             bra_plus=data["bra_+"]
         )
+
+    def to_dict(self) -> dict:
+        data = super().to_dict()
+        data["basis"] = self.basis
+        return data
 
     @property
     def n(self):
@@ -201,6 +219,22 @@ class SyndromeMeasurementCircuit(Circuit):
     bra_zero: list[int]
     bra_plus: list[int]
     flags: list[int]
+
+    @classmethod
+    def from_dict(cls, data: dict):
+        return cls(
+            ket_zero=data["ket_0"],
+            ket_plus=data["ket_+"],
+            cnots=[(c, n) for [c, n] in data["cnots"]],
+            bra_zero=data["bra_0"],
+            bra_plus=data["bra_+"],
+            flags=data["flags"],
+        )
+
+    def to_dict(self) -> dict[str, list]:
+        data = super().to_dict()
+        data["flags"] = self.flags.copy()
+        return data
 
     @classmethod
     def steane_style(cls, state_prep: StatePreparationCircuit):
@@ -257,21 +291,21 @@ class QECCGadgets:
     def from_json(cls, filename):
         with open(filename) as json_file:
             data = json.load(json_file)
-        code = QECC.from_json_string(data)
-        ft_z_state_prep = StatePreparationCircuit.from_json_string(
+        code = QECC.from_dict(data)
+        ft_z_state_prep = StatePreparationCircuit.from_dict(
             data.get("fault_tolerant_zero_state_prep"), basis=Basis.Z
         )
-        non_ft_z_state_prep = StatePreparationCircuit.from_json_string(
+        non_ft_z_state_prep = StatePreparationCircuit.from_dict(
             data.get("non_fault_tolerant_zero_state_prep"), basis=Basis.Z
         )
         if code.is_self_dual:
             ft_x_state_prep = ft_z_state_prep.dual()
             non_ft_x_state_prep = non_ft_z_state_prep.dual()
         else:
-            ft_x_state_prep = StatePreparationCircuit.from_json_string(
+            ft_x_state_prep = StatePreparationCircuit.from_dict(
                 data.get("fault_tolerant_plus_state_prep"), basis=Basis.X
             )
-            non_ft_x_state_prep = StatePreparationCircuit.from_json_string(
+            non_ft_x_state_prep = StatePreparationCircuit.from_dict(
                 data.get("non_fault_tolerant_plus_state_prep"), basis=Basis.X
             )
         return cls(

@@ -10,7 +10,7 @@ import numpy as np
 import pyzx as zx
 import stim
 
-from qecc import QECCGadgets
+from qecc import QECCGadgets, Circuit, SyndromeMeasurementCircuit
 from verify_fault_tolerance import list_to_str_stabs, build_css_syndrome_table, compute_modified_lookup_table
 
 
@@ -338,7 +338,9 @@ class CoveredZXGraph:
             for u in p:
                 node_to_qubit[u] = qubit_to_qubit[q]
             if self.node_types[p[0]] == zx.VertexType.Z:
-                ordered_operations.append(("H", qubit_to_qubit[q]))
+                ordered_operations.append(("PrepX", qubit_to_qubit[q]))
+            elif self.node_types[p[0]] == zx.VertexType.X:
+                ordered_operations.append(("PrepZ", qubit_to_qubit[q]))
             lasts.add(p[-1])
 
         path_edges_list = [[_sorted_pair(v1, v2) for v1, v2 in zip(p, p[1:])]
@@ -393,28 +395,45 @@ class CoveredZXGraph:
 
                 if s in lasts:
                     if ts == zx.VertexType.Z:
-                        ordered_operations.append(("H", qs))
-                    ordered_operations.append(("M", qs))
+                        ordered_operations.append(("MeasX", qs))
+                    elif ts == zx.VertexType.X:
+                        ordered_operations.append(("MeasZ", qs))
 
         return ordered_operations
 
-    def extract_circuit(self) -> stim.Circuit:
+    def to_syndrome_measurement_circuit(self) -> SyndromeMeasurementCircuit:
         if not self.check_causal_flow():
             raise ValueError("Circuit must have causal flow.")
 
-        ops = self._find_total_ordering()
+        ket_0, ket_plus = [], []
+        cnots = []
+        bra_0, bra_plus = [], []
         measurements = []
-        circ = stim.Circuit()
-        for txt, qubits in ops:
-            if txt in ("M", "MZ", "MR"):
-                measurements.append((txt, qubits))
-            else:
-                circ.append(txt, qubits)
-        measurements.sort(key=lambda x: x[1])
-        for txt, qubits in measurements:
-            circ.append(txt, qubits)
 
-        return circ
+        ops = self._find_total_ordering()
+        for op, qubits in ops:
+            if op == "PrepZ":
+                ket_0.append(qubits)
+            elif op == "PrepX":
+                ket_plus.append(qubits)
+            elif op in ("CNOT", "CX"):
+                cnots.append(qubits)
+            elif op == "MeasZ":
+                bra_0.append(qubits)
+                measurements.append(qubits)
+            elif op == "MeasX":
+                bra_plus.append(qubits)
+                measurements.append(qubits)
+
+        measurements.sort()
+        flag_qubits = [measurements[i] for i in self.flag_qubit_indices()]
+
+        return SyndromeMeasurementCircuit(
+            ket_0, ket_plus, cnots, bra_0, bra_plus, flag_qubits
+        )
+
+    def extract_circuit(self) -> stim.Circuit:
+        return self.to_syndrome_measurement_circuit().to_stim(_layer_cnots=False)
 
     def matrix_transformation_indices(self) -> list:
         lasts = [p[-1] for p in self.paths.values() if self.node_types[p[-1]] != zx.VertexType.BOUNDARY]
@@ -478,7 +497,8 @@ def all_good_FT_opts(
 
 if __name__ == '__main__':
     gadgets = QECCGadgets.from_json("circuits/15_7_3.json")
-    diagram = gadgets.non_ft_steane_z_syndrome_extraction.to_pyzx()
+    diagram = gadgets.steane_z_syndrome_extraction.to_pyzx()
+    print(gadgets.steane_z_syndrome_extraction.to_stim())
     cov_graph = CoveredZXGraph.from_zx_diagram(diagram)
     initial_size = len(cov_graph.paths)
     cov_graph.visualize()
@@ -496,5 +516,7 @@ if __name__ == '__main__':
         print(cv.matrix_transformation_indices())
         print(cv.measurement_qubit_indices())
         print(cv.flag_qubit_indices())
-        print(cv.extract_circuit())
+        se_circ = cv.to_syndrome_measurement_circuit()
+        print(se_circ)
+        print(se_circ.to_dict())
         print()
