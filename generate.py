@@ -19,17 +19,10 @@ def init_circuits_folder():
     Path(f"{cwd}/simplified_circuits").mkdir(parents=True, exist_ok=True)
 
 
-def circuit_depth(data: dict):
-    ops = explode_circuit(data["stim_circuit"])
-    cnots = [list(map(lambda x: x.value, op.targets_copy())) for op in ops if op.name in ("CX", "CNOT")]
-    return len(_layer_cnot_circuit(cnots))
-
-
 def depth_minimal_circuit(cov_graph):
     circuit_data = []
     for cv in cov_graph.min_ancilla_boundary_bends():
         data = {
-            "stim_circuit": cv.extract_circuit(),
             "circuit": cv.to_syndrome_measurement_circuit(),
             "H_indices": cv.matrix_transformation_indices(),
             "measurement_indices": cv.measurement_qubit_indices(),
@@ -61,7 +54,7 @@ def generate_simplification(qecc_gadgets):
     stabs = list_to_str_stabs(qecc_gadgets.code.H_z)
     depth_best_circuit_data["lookup_table"] = build_css_syndrome_table(stabs, qecc_gadgets.code.d)
     depth_best_circuit_data["modified_lookup_table"] = compute_modified_lookup_table(
-        depth_best_circuit_data["stim_circuit"],
+        depth_best_circuit_data["circuit"].to_stim(),
         qecc_gadgets.code.H_z,
         qecc_gadgets.code.L_x,
         depth_best_circuit_data["lookup_table"],
@@ -78,7 +71,6 @@ def generate_simplification(qecc_gadgets):
 def save_optimised_se(data, code):
     to_save = data.copy()
 
-    to_save["stim_circuit"] = str(to_save["stim_circuit"])
     to_save["circuit"] = to_save["circuit"].to_dict()
     to_save["lookup_table"] = make_json_serializable(to_save["lookup_table"])
     to_save["modified_lookup_table"] = make_json_serializable(to_save["modified_lookup_table"])
@@ -96,6 +88,7 @@ if __name__ == "__main__":
     qecc_gadgets = QECCGadgets.from_json(f"circuits/{qecc}.json")
     simp_data = generate_simplification(qecc_gadgets)
     save_optimised_se(simp_data, qecc)
+    print(simp_data["circuit"].to_stim(_layer_cnots=False))
 
 
 

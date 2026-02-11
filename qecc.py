@@ -40,6 +40,10 @@ class NoiseModel:
     def Quantinuum_Helios(cls):
         return cls(p_1=3e-5, p_2=8e-4, p_init=5e-4, p_meas=5e-4, p_mem=6e-4)
 
+    @classmethod
+    def Quantinuum_Sol(cls):
+        return cls(p_1=3e-5, p_2=8e-4, p_init=5e-4, p_meas=5e-4, p_mem=6e-4)
+
 
 @dataclass
 class QECC:
@@ -124,7 +128,7 @@ class Circuit(abc.ABC):
             circ.append("H", i)
             if noise_model.p_1 > 0:
                 circ.append("DEPOLARIZE1", i, noise_model.p_1)
-        for i in self.bra_zero + self.bra_plus:
+        for i in sorted(self.bra_zero + self.bra_plus):
             if noise_model.p_meas > 0:
                 circ.append("MR", i, noise_model.p_meas)
             else:
@@ -229,6 +233,16 @@ class SyndromeMeasurementCircuit(Circuit):
             bra_zero=data["bra_0"],
             bra_plus=data["bra_+"],
             flags=data["flags"],
+        )
+
+    def dual(self) -> SyndromeMeasurementCircuit:
+        return SyndromeMeasurementCircuit(
+            ket_zero=self.ket_plus.copy(),
+            ket_plus=self.ket_zero.copy(),
+            cnots=[(n, c) for c, n in self.cnots],
+            bra_zero=self.bra_plus.copy(),
+            bra_plus=self.bra_zero.copy(),
+            flags=self.flags.copy(),
         )
 
     def to_dict(self) -> dict[str, list]:
